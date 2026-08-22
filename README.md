@@ -30,6 +30,12 @@ and terminates the Pod manually or after 20 idle minutes. Completed image blobs
 are copied into browser IndexedDB before teardown, so Library images do not
 depend on disposable worker storage.
 
+Flujo deploys as one container and one Pod-facing service. The Docker build
+compiles Svelte and Gleam in separate stages, then places the frontend bundle
+inside the small Erlang runtime image. The Gleam/Mist server serves both the
+SPA and `/api/*` on port 4000; `docker compose up --build` publishes that single
+service at `http://localhost:8080`.
+
 ---
 
 ## 1. Project goals

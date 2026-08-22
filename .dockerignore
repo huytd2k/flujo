@@ -1,0 +1,7 @@
+.git
+.env
+artifacts
+build
+frontend/dist
+frontend/node_modules
+worker

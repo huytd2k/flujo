@@ -1,5 +1,6 @@
 import envoy
 import flujo/adapters/runpod_pods as runpod
+import flujo/static
 import gleam/bit_array
 import gleam/bytes_tree
 import gleam/erlang/process
@@ -60,7 +61,37 @@ fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> R
       with_operation(runpod.history(pod_id, prompt_id), 200)
     Post, ["api", "workers", pod_id, "jobs", _, "cancel"] ->
       with_operation(runpod.cancel(pod_id), 200)
+    Get, ["api", ..] -> respond(404, error_json("not_found"))
+    Get, ["assets", ..asset_path] ->
+      serve_file("/app/public/assets/" <> string.join(asset_path, "/"))
+    Get, _ -> serve_file("/app/public/index.html")
     _, _ -> respond(404, error_json("not_found"))
+  }
+}
+
+fn serve_file(path: String) -> Response(ResponseData) {
+  case static.read(path) {
+    Ok(body) ->
+      response.new(200)
+      |> response.set_header("content-type", content_type(path))
+      |> response.set_header("cache-control", case string.ends_with(path, "index.html") { True -> "no-cache" False -> "public, max-age=31536000, immutable" })
+      |> response.set_body(mist.Bytes(bytes_tree.from_bit_array(body)))
+    Error(_) -> respond(404, error_json("asset_not_found"))
+  }
+}
+
+fn content_type(path: String) -> String {
+  case string.ends_with(path, ".html"), string.ends_with(path, ".css"),
+    string.ends_with(path, ".js"), string.ends_with(path, ".svg"),
+    string.ends_with(path, ".png"), string.ends_with(path, ".webp")
+  {
+    True, _, _, _, _, _ -> "text/html; charset=utf-8"
+    _, True, _, _, _, _ -> "text/css; charset=utf-8"
+    _, _, True, _, _, _ -> "text/javascript; charset=utf-8"
+    _, _, _, True, _, _ -> "image/svg+xml"
+    _, _, _, _, True, _ -> "image/png"
+    _, _, _, _, _, True -> "image/webp"
+    _, _, _, _, _, _ -> "application/octet-stream"
   }
 }
 

@@ -1,13 +1,8 @@
 services:
-  api:
+  flujo:
     build: .
     environment:
       PORT: 4000
       RUNPOD_API_KEY: ${RUNPOD_API_KEY:-}
-    ports: ["4000:4000"]
-    restart: unless-stopped
-  web:
-    build: frontend
-    depends_on: [api]
-    ports: ["8080:80"]
+    ports: ["8080:4000"]
     restart: unless-stopped
