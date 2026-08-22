@@ -1,4 +1,4 @@
-FROM gleamlang/gleam:v1.18.1-erlang-alpine AS build
+FROM ghcr.io/gleam-lang/gleam:v1.18.1-erlang-alpine AS build
 WORKDIR /app
 COPY gleam.toml manifest.toml ./
 COPY src src
@@ -11,4 +11,3 @@ COPY --from=build /app/build/erlang-shipment ./
 ENV PORT=4000
 EXPOSE 4000
 CMD ["./entrypoint.sh", "run"]
-
