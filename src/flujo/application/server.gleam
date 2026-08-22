@@ -52,7 +52,7 @@ fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> R
     Get, ["api", "workers", pod_id] ->
       with_config(config, fn(value) { runpod.pod(value, pod_id) }, 200)
     Get, ["api", "workers", pod_id, "health"] ->
-      with_operation(runpod.runtime_health(pod_id), 200)
+      runtime_readiness(runpod.runtime_health(pod_id))
     Delete, ["api", "workers", pod_id] ->
       with_config(config, fn(value) { runpod.terminate(value, pod_id) }, 200)
     Post, ["api", "workers", pod_id, "generations"] ->
@@ -66,6 +66,21 @@ fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> R
       serve_file("/app/public/assets/" <> string.join(asset_path, "/"))
     Get, _ -> serve_file("/app/public/index.html")
     _, _ -> respond(404, error_json("not_found"))
+  }
+}
+
+fn runtime_readiness(result: Result(String, runpod.Error)) -> Response(ResponseData) {
+  case result {
+    Ok(_) -> respond(200, json.object([#("ready", json.bool(True))]) |> json.to_string)
+    Error(runpod.Upstream(404, _)) ->
+      respond(200, json.object([#("ready", json.bool(False))]) |> json.to_string)
+    Error(runpod.Upstream(502, _)) ->
+      respond(200, json.object([#("ready", json.bool(False))]) |> json.to_string)
+    Error(runpod.Upstream(503, _)) ->
+      respond(200, json.object([#("ready", json.bool(False))]) |> json.to_string)
+    Error(runpod.Transport) ->
+      respond(200, json.object([#("ready", json.bool(False))]) |> json.to_string)
+    Error(error) -> with_operation(Error(error), 200)
   }
 }
 

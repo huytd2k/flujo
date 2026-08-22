@@ -4,16 +4,17 @@
   const DEFAULT_PROMPT='cinematic portrait of a woman outside a convenience store at night, rain reflections, soft tungsten light, natural skin texture';
   let tab:'create'|'library'|'settings'='create',prompt=DEFAULT_PROMPT,seed=42,width=1024,height=1024;
   let configured=false,busy=false,message='Checking gateway…',images:string[]=[],library:string[]=[];
-  let worker:Pod|null=null,promptId:string|null=null,idleTimer:ReturnType<typeof setTimeout>|null=null;
+  const savedWorkerId=sessionStorage.getItem('flujo.runpod.worker');
+  let worker:Pod|null=savedWorkerId?{id:savedWorkerId}:null,promptId:string|null=null,idleTimer:ReturnType<typeof setTimeout>|null=null;
   let provider=runPodSettings(),apiKey=provider.apiKey,showKey=false;
   const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
   health().then(result=>{configured=result.configured;message=result.configured?'Worker sleeping':'Add your RunPod API key in Settings'}).catch(error=>message=error.message);
   loadImages().then(saved=>library=saved.map(displayUrl)).catch(()=>{});
   function validDimension(value:number){return Math.max(256,Math.min(2048,Math.round(value/16)*16))}
   async function ensureWorker(){
-    if(worker){try{await runtimeHealth(worker.id);return worker}catch{/* stale or booting */}}
-    message='Finding a 24 GB GPU…';worker=await provision();message=`Pod ${worker.id} provisioning`;
-    for(let attempt=0;attempt<120;attempt++){if(!worker)throw new Error('Worker was stopped');try{await runtimeHealth(worker.id);message='Krea 2 worker ready';return worker}catch{await sleep(5000);message=`Worker booting · ${(attempt+1)*5}s`}}
+    if(!worker){message='Finding a 24 GB GPU…';worker=await provision();sessionStorage.setItem('flujo.runpod.worker',worker.id);message=`Pod ${worker.id} provisioning`}
+    else message=`Waiting for Pod ${worker.id}`;
+    for(let attempt=0;attempt<120;attempt++){if(!worker)throw new Error('Worker was stopped');const runtime=await runtimeHealth(worker.id);if(runtime.ready){message='Krea 2 worker ready';return worker}await sleep(5000);message=attempt<60?`Pulling worker image / booting · ${(attempt+1)*5}s`:`Waiting for ComfyUI · ${(attempt+1)*5}s`}
     throw new Error('Worker did not become ready within 10 minutes');
   }
   function scheduleIdleStop(){if(idleTimer)clearTimeout(idleTimer);idleTimer=setTimeout(()=>stopWorker('Stopped after 20 idle minutes'),20*60_000)}
@@ -24,7 +25,7 @@
     scheduleIdleStop();
   }catch(error){message=error instanceof Error?error.message:String(error)}finally{busy=false;promptId=null}}
   async function cancelJob(){if(worker&&promptId){await cancel(worker.id,promptId);busy=false;promptId=null;message='Generation cancelled';scheduleIdleStop()}}
-  async function stopWorker(done='Worker terminated'){if(!worker)return;const id=worker.id;worker=null;if(idleTimer)clearTimeout(idleTimer);try{await terminate(id);message=done}catch(error){message=error instanceof Error?error.message:String(error)}}
+  async function stopWorker(done='Worker terminated'){if(!worker)return;const id=worker.id;worker=null;sessionStorage.removeItem('flujo.runpod.worker');if(idleTimer)clearTimeout(idleTimer);try{await terminate(id);message=done}catch(error){message=error instanceof Error?error.message:String(error)}}
   async function saveProvider(){setRunPodSettings(apiKey);try{const result=await health();configured=result.configured;message=result.configured?'RunPod settings ready':'API key is required'}catch(error){configured=false;message=error instanceof Error?error.message:String(error)}}
 </script>
 <svelte:head><title>Flujo v0.1</title></svelte:head>
