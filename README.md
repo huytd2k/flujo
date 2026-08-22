@@ -23,8 +23,9 @@ even when RunPod mounts a persistent `/workspace` volume. A GitHub Actions
 workflow publishes the large amd64 image to GHCR; the accompanying script then
 creates a private, non-serverless RunPod template referencing that image.
 
-The gateway uses `RUNPOD_API_KEY` and `RUNPOD_TEMPLATE_ID` to provision a
-normal Pod on demand, waits for ComfyUI, submits the bundled Krea 2 workflow,
+The gateway uses a session-provided or server-side `RUNPOD_API_KEY` with the
+application-owned RunPod template `7d5q9pntz6` to provision a normal Pod on
+demand, waits for ComfyUI, submits the bundled Krea 2 workflow,
 and terminates the Pod manually or after 20 idle minutes. Completed image blobs
 are copied into browser IndexedDB before teardown, so Library images do not
 depend on disposable worker storage.

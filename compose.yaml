@@ -4,7 +4,6 @@ services:
     environment:
       PORT: 4000
       RUNPOD_API_KEY: ${RUNPOD_API_KEY:-}
-      RUNPOD_TEMPLATE_ID: ${RUNPOD_TEMPLATE_ID:-}
     ports: ["4000:4000"]
     restart: unless-stopped
   web:

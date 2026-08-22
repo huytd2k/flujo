@@ -30,11 +30,9 @@ pub fn main() {
 
 fn load_config() -> Result(runpod.Config, Nil) {
   use api_key <- result.try(envoy.get("RUNPOD_API_KEY"))
-  use template_id <- result.try(envoy.get("RUNPOD_TEMPLATE_ID"))
-  case string.trim(api_key), string.trim(template_id) {
-    "", _ -> Error(Nil)
-    _, "" -> Error(Nil)
-    api_key, template_id -> Ok(runpod.Config(api_key, template_id))
+  case string.trim(api_key) {
+    "" -> Error(Nil)
+    api_key -> Ok(runpod.Config(api_key))
   }
 }
 
@@ -70,16 +68,13 @@ fn request_config(
   request: Request(Connection),
   fallback: Result(runpod.Config, Nil),
 ) -> Result(runpod.Config, Nil) {
-  case request.get_header(request, "x-flujo-runpod-key"),
-    request.get_header(request, "x-flujo-runpod-template")
-  {
-    Ok(api_key), Ok(template_id) ->
-      case string.trim(api_key), string.trim(template_id) {
-        "", _ -> fallback
-        _, "" -> fallback
-        api_key, template_id -> Ok(runpod.Config(api_key, template_id))
+  case request.get_header(request, "x-flujo-runpod-key") {
+    Ok(api_key) ->
+      case string.trim(api_key) {
+        "" -> fallback
+        api_key -> Ok(runpod.Config(api_key))
       }
-    _, _ -> fallback
+    Error(_) -> fallback
   }
 }
 
@@ -121,7 +116,7 @@ fn respond(status: Int, body: String) -> Response(ResponseData) {
   response.new(status)
   |> response.set_header("content-type", "application/json; charset=utf-8")
   |> response.set_header("access-control-allow-origin", "*")
-  |> response.set_header("access-control-allow-headers", "content-type, x-flujo-runpod-key, x-flujo-runpod-template")
+  |> response.set_header("access-control-allow-headers", "content-type, x-flujo-runpod-key")
   |> response.set_header("access-control-allow-methods", "GET, POST, DELETE, OPTIONS")
   |> response.set_body(mist.Bytes(bytes_tree.from_string(body)))
 }

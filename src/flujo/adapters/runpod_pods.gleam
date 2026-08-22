@@ -6,7 +6,7 @@ import gleam/list
 import gleam/result
 
 pub type Config {
-  Config(api_key: String, template_id: String)
+  Config(api_key: String)
 }
 
 pub type Error {
@@ -17,9 +17,9 @@ pub type Error {
 }
 
 const runpod_url = "https://rest.runpod.io/v1"
+const template_id = "7d5q9pntz6"
 
 pub fn provision(config: Config) -> Result(String, Error) {
-  let Config(_, template_id) = config
   let body =
     json.object([
       #("name", json.string("flujo-krea2")),
@@ -67,7 +67,7 @@ pub fn cancel(pod_id: String) -> Result(String, Error) {
 }
 
 fn runpod(config: Config, method: Method, path: String, body: String) -> Result(String, Error) {
-  let Config(api_key, _) = config
+  let Config(api_key) = config
   dispatch(method, runpod_url <> path, body, [#("authorization", "Bearer " <> api_key)])
 }
 
