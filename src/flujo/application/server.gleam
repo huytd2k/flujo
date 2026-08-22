@@ -39,6 +39,7 @@ fn load_config() -> Result(runpod.Config, Nil) {
 }
 
 fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> Response(ResponseData) {
+  let config = request_config(request, config)
   case request.method, request.path |> path_segments {
     Options, _ -> respond(204, "")
     Get, ["api", "health"] ->
@@ -62,6 +63,23 @@ fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> R
     Post, ["api", "workers", pod_id, "jobs", _, "cancel"] ->
       with_operation(runpod.cancel(pod_id), 200)
     _, _ -> respond(404, error_json("not_found"))
+  }
+}
+
+fn request_config(
+  request: Request(Connection),
+  fallback: Result(runpod.Config, Nil),
+) -> Result(runpod.Config, Nil) {
+  case request.get_header(request, "x-flujo-runpod-key"),
+    request.get_header(request, "x-flujo-runpod-template")
+  {
+    Ok(api_key), Ok(template_id) ->
+      case string.trim(api_key), string.trim(template_id) {
+        "", _ -> fallback
+        _, "" -> fallback
+        api_key, template_id -> Ok(runpod.Config(api_key, template_id))
+      }
+    _, _ -> fallback
   }
 }
 
@@ -103,7 +121,7 @@ fn respond(status: Int, body: String) -> Response(ResponseData) {
   response.new(status)
   |> response.set_header("content-type", "application/json; charset=utf-8")
   |> response.set_header("access-control-allow-origin", "*")
-  |> response.set_header("access-control-allow-headers", "content-type")
+  |> response.set_header("access-control-allow-headers", "content-type, x-flujo-runpod-key, x-flujo-runpod-template")
   |> response.set_header("access-control-allow-methods", "GET, POST, DELETE, OPTIONS")
   |> response.set_body(mist.Bytes(bytes_tree.from_string(body)))
 }

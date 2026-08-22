@@ -2,7 +2,10 @@ export type Pod={id:string;desiredStatus?:string;costPerHr?:number;machine?:{gpu
 export type PromptJob={prompt_id:string;number?:number;node_errors?:Record<string,unknown>};
 export type ComfyImage={filename:string;subfolder:string;type:string};
 export type ComfyHistory={status?:{completed?:boolean;status_str?:string};outputs?:Record<string,{images?:ComfyImage[]}>};
-async function json<T>(url:string,init?:RequestInit):Promise<T>{const response=await fetch(url,init);const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(!response.ok)throw new Error(body.error||body.message||`HTTP ${response.status}`);return body as T}
+let runpodKey=sessionStorage.getItem('flujo.runpod.key')||'',runpodTemplate=sessionStorage.getItem('flujo.runpod.template')||'';
+export function runPodSettings(){return {apiKey:runpodKey,templateId:runpodTemplate}}
+export function setRunPodSettings(apiKey:string,templateId:string){runpodKey=apiKey.trim();runpodTemplate=templateId.trim();if(runpodKey)sessionStorage.setItem('flujo.runpod.key',runpodKey);else sessionStorage.removeItem('flujo.runpod.key');if(runpodTemplate)sessionStorage.setItem('flujo.runpod.template',runpodTemplate);else sessionStorage.removeItem('flujo.runpod.template')}
+async function json<T>(url:string,init:RequestInit={}):Promise<T>{const headers=new Headers(init.headers);if(runpodKey)headers.set('x-flujo-runpod-key',runpodKey);if(runpodTemplate)headers.set('x-flujo-runpod-template',runpodTemplate);const response=await fetch(url,{...init,headers});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(!response.ok)throw new Error(body.error||body.message||`HTTP ${response.status}`);return body as T}
 export const health=()=>json<{ok:boolean;configured:boolean;provider:string}>('/api/health');
 export const provision=()=>json<Pod>('/api/workers',{method:'POST'});
 export const runtimeHealth=(id:string)=>json<unknown>(`/api/workers/${encodeURIComponent(id)}/health`);
