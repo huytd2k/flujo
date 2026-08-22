@@ -49,6 +49,8 @@ fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> R
       ]) |> json.to_string)
     Post, ["api", "workers"] ->
       with_config(config, runpod.provision, 201)
+    Get, ["api", "workers"] ->
+      with_config(config, runpod.pods, 200)
     Get, ["api", "workers", pod_id] ->
       with_config(config, fn(value) { runpod.pod(value, pod_id) }, 200)
     Get, ["api", "workers", pod_id, "health"] ->

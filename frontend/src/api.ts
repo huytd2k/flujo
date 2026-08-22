@@ -1,4 +1,4 @@
-export type Pod={id:string;desiredStatus?:string;costPerHr?:number;machine?:{gpuDisplayName?:string}};
+export type Pod={id:string;name?:string;desiredStatus?:string;lastStatusChange?:string;costPerHr?:number;imageName?:string;machine?:{gpuDisplayName?:string};runtime?:{uptimeInSeconds?:number}};
 export type PromptJob={prompt_id:string;number?:number;node_errors?:Record<string,unknown>};
 export type ComfyImage={filename:string;subfolder:string;type:string};
 export type ComfyHistory={status?:{completed?:boolean;status_str?:string};outputs?:Record<string,{images?:ComfyImage[]}>};
@@ -8,6 +8,8 @@ export function setRunPodSettings(apiKey:string){runpodKey=apiKey.trim();if(runp
 async function json<T>(url:string,init:RequestInit={}):Promise<T>{const headers=new Headers(init.headers);if(runpodKey)headers.set('x-flujo-runpod-key',runpodKey);const response=await fetch(url,{...init,headers});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(!response.ok)throw new Error(body.error||body.message||`HTTP ${response.status}`);return body as T}
 export const health=()=>json<{ok:boolean;configured:boolean;provider:string}>('/api/health');
 export const provision=()=>json<Pod>('/api/workers',{method:'POST'});
+export const pods=()=>json<Pod[]|{pods?:Pod[]}>('/api/workers');
+export const pod=(id:string)=>json<Pod>(`/api/workers/${encodeURIComponent(id)}`);
 export const runtimeHealth=(id:string)=>json<{ready:boolean}>(`/api/workers/${encodeURIComponent(id)}/health`);
 export const terminate=(id:string)=>json<unknown>(`/api/workers/${encodeURIComponent(id)}`,{method:'DELETE'});
 export const submit=(podId:string,workflow:unknown)=>json<PromptJob>(`/api/workers/${encodeURIComponent(podId)}/generations`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:workflow,client_id:'flujo-v01'})});

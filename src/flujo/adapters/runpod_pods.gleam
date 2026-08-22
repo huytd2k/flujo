@@ -46,6 +46,10 @@ pub fn pod(config: Config, pod_id: String) -> Result(String, Error) {
   runpod(config, Get, "/pods/" <> pod_id, "")
 }
 
+pub fn pods(config: Config) -> Result(String, Error) {
+  runpod(config, Get, "/pods", "")
+}
+
 pub fn terminate(config: Config, pod_id: String) -> Result(String, Error) {
   runpod(config, Delete, "/pods/" <> pod_id, "")
 }
