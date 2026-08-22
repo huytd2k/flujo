@@ -10,4 +10,4 @@ WORKDIR /app
 COPY --from=build /app/build/erlang-shipment ./
 ENV PORT=4000
 EXPOSE 4000
-CMD ["./entrypoint.sh", "run"]
+CMD ["/bin/sh", "./entrypoint.sh", "run"]

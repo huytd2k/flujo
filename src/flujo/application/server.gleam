@@ -31,7 +31,11 @@ pub fn main() {
 fn load_config() -> Result(runpod.Config, Nil) {
   use api_key <- result.try(envoy.get("RUNPOD_API_KEY"))
   use template_id <- result.try(envoy.get("RUNPOD_TEMPLATE_ID"))
-  Ok(runpod.Config(api_key, template_id))
+  case string.trim(api_key), string.trim(template_id) {
+    "", _ -> Error(Nil)
+    _, "" -> Error(Nil)
+    api_key, template_id -> Ok(runpod.Config(api_key, template_id))
+  }
 }
 
 fn handle(request: Request(Connection), config: Result(runpod.Config, Nil)) -> Response(ResponseData) {
