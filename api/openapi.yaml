@@ -1,0 +1,44 @@
+openapi: 3.1.0
+info: {title: Flujo API, version: 0.1.0}
+paths:
+  /api/health:
+    get:
+      responses:
+        '200': {description: Gateway health, content: {application/json: {schema: {$ref: '#/components/schemas/Health'}}}}
+  /api/generations:
+    post:
+      description: Submit a ComfyUI API-format workflow to the configured RunPod Serverless endpoint.
+      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/WorkerInput'}}}}
+      responses:
+        '200': {description: RunPod job, content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+  /api/jobs/{jobId}:
+    get:
+      parameters: [{$ref: '#/components/parameters/JobId'}]
+      responses:
+        '200': {description: RunPod job state, content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+  /api/jobs/{jobId}/cancel:
+    post:
+      parameters: [{$ref: '#/components/parameters/JobId'}]
+      responses:
+        '200': {description: Cancel result, content: {application/json: {schema: {$ref: '#/components/schemas/Job'}}}}
+components:
+  parameters:
+    JobId: {name: jobId, in: path, required: true, schema: {type: string}}
+  schemas:
+    Health:
+      type: object
+      required: [ok, configured, provider]
+      properties: {ok: {type: boolean}, configured: {type: boolean}, provider: {type: string}}
+    WorkerInput:
+      type: object
+      required: [input]
+      properties: {input: {type: object, required: [workflow], properties: {workflow: {type: object, additionalProperties: true}}}}
+    Job:
+      type: object
+      required: [id]
+      properties:
+        id: {type: string}
+        status: {type: string, enum: [IN_QUEUE, IN_PROGRESS, COMPLETED, FAILED, CANCELLED, TIMED_OUT]}
+        output: {}
+        error: {type: string}
+

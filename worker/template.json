@@ -1,0 +1,19 @@
+{
+  "imageName": "IMAGE_NAME",
+  "name": "flujo-krea2-turbo-v01",
+  "category": "NVIDIA",
+  "containerDiskInGb": 50,
+  "dockerEntrypoint": [],
+  "dockerStartCmd": [],
+  "env": {},
+  "isPublic": false,
+  "isServerless": false,
+  "ports": [
+    "8188/http",
+    "22/tcp"
+  ],
+  "readme": "Flujo v0.1 ComfyUI Pod with Krea 2 Turbo FP8, Qwen3VL 4B FP8, and Qwen Image VAE baked into immutable image layers.",
+  "volumeInGb": 20,
+  "volumeMountPath": "/workspace"
+}
+

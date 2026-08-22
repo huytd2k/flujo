@@ -14,6 +14,15 @@ The user should not need to understand containers, worker URLs, GPU lifecycle, p
 
 Flujo owns that complexity.
 
+## Krea 2 RunPod worker
+
+The v0.1 worker image and normal-Pod template live in [`worker/`](worker/README.md).
+It bakes the tested Krea 2 Turbo FP8 model, Qwen3VL encoder, and VAE into the
+container, verifies every artifact by SHA-256, and makes the models available
+even when RunPod mounts a persistent `/workspace` volume. A GitHub Actions
+workflow publishes the large amd64 image to GHCR; the accompanying script then
+creates a private, non-serverless RunPod template referencing that image.
+
 ---
 
 ## 1. Project goals
