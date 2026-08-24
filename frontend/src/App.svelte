@@ -1,43 +1,315 @@
 <script lang="ts">
-  import {cancel,health,history,imageUrl,krea2Workflow,pods as listPods,provision,runPodSettings,runtimeHealth,setRunPodSettings,submit,terminate,type ComfyHistory,type Pod} from './api';
-  import {displayUrl,loadImages,saveRemoteImage} from './library';
-  const DEFAULT_PROMPT='cinematic portrait of a woman outside a convenience store at night, rain reflections, soft tungsten light, natural skin texture';
-  let tab:'create'|'library'|'workers'|'settings'='create',prompt=DEFAULT_PROMPT,seed=42,width=1024,height=1024;
-  let configured=false,busy=false,message='Checking gateway…',images:string[]=[],library:string[]=[],providerName='remote-comfy';
-  const savedWorkerId=sessionStorage.getItem('flujo.runpod.worker');
-  let worker:Pod|null=savedWorkerId?{id:savedWorkerId}:null,promptId:string|null=null,idleTimer:ReturnType<typeof setTimeout>|null=null;
-  let provider=runPodSettings(),apiKey=provider.apiKey,showKey=false;
-  let workers:Pod[]=[],workerReady:Record<string,boolean>={},workersBusy=false;
-  const sleep=(ms:number)=>new Promise(resolve=>setTimeout(resolve,ms));
-  health().then(result=>{configured=result.configured;providerName=result.provider;message=result.provider==='remote-comfy'?'Checking local ComfyUI…':result.configured?'Worker sleeping':'Add your RunPod API key in Settings'}).catch(error=>message=error.message);
-  loadImages().then(saved=>library=saved.map(displayUrl)).catch(()=>{});
-  function validDimension(value:number){return Math.max(256,Math.min(2048,Math.round(value/16)*16))}
-  async function ensureWorker(){
-    if(!worker){message='Finding a 24 GB GPU…';worker=await provision();sessionStorage.setItem('flujo.runpod.worker',worker.id);message=`Pod ${worker.id} provisioning`}
-    else message=`Waiting for Pod ${worker.id}`;
-    for(let attempt=0;attempt<120;attempt++){if(!worker)throw new Error('Worker was stopped');const runtime=await runtimeHealth(worker.id);if(runtime.ready){message='Krea 2 worker ready';return worker}await sleep(5000);message=attempt<60?`Pulling worker image / booting · ${(attempt+1)*5}s`:`Waiting for ComfyUI · ${(attempt+1)*5}s`}
-    throw new Error('Worker did not become ready within 10 minutes');
+  import { onMount } from "svelte";
+  import {
+    api,
+    imageUrl,
+    runnerWorkflow,
+    type Runner,
+    type RunnerInstance,
+    type SchemaProperty,
+  } from "./api";
+
+  type Phase = "offline" | "idle" | "spinning" | "ready" | "running" | "error";
+  type Result = { url: string; prompt: string; inputs: Record<string, unknown> };
+
+  const ratios = [
+    { label: "1:1", width: 1024, height: 1024 },
+    { label: "4:5", width: 832, height: 1040 },
+    { label: "16:9", width: 1024, height: 576 },
+    { label: "9:16", width: 576, height: 1024 },
+  ];
+
+  let runners: Runner[] = [];
+  let selectedRunnerId = "";
+  let inputs: Record<string, unknown> = {};
+  let instance: RunnerInstance | null = null;
+  let phase: Phase = "idle";
+  let detail = "Choose a runner and create";
+  let runId = "";
+  let results: Result[] = [];
+  let selected: Result | null = null;
+  let settingsOpen = false;
+  let runToken = 0;
+
+  $: selectedRunner = runners.find((runner) => runner.id === selectedRunnerId);
+  $: properties = Object.entries(selectedRunner?.inputSchema.properties || {});
+  $: busy = phase === "spinning" || phase === "running";
+  $: canRun = String(inputs.prompt || "").trim().length > 0 && selectedRunnerId !== "" && !busy && phase !== "offline";
+
+  onMount(() => {
+    initialize();
+    const handleKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRun) run();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  });
+
+  async function initialize(attempt = 0) {
+    try {
+      const [health, available, active] = await Promise.all([
+        api.health(),
+        api.runners(),
+        api.instances().catch(() => []),
+      ]);
+      if (!health.configured) {
+        phase = "offline";
+        detail = "Runner provider is not configured";
+        return;
+      }
+      runners = available;
+      if (available[0]) selectRunner(available[0].id);
+      const matching = active.find((candidate) => candidate.runnerId === available[0]?.id);
+      if (matching) {
+        instance = await api.instance(matching.id).catch(() => matching);
+        const status = await api.ready(matching.id).catch(() => ({ ready: false }));
+        phase = status.ready ? "ready" : "spinning";
+        detail = status.ready ? "Runner is ready" : "Runner is starting";
+      }
+    } catch (error) {
+      phase = "offline";
+      detail = errorMessage(error);
+      if (attempt < 5) {
+        await sleep(1_000);
+        await initialize(attempt + 1);
+      }
+    }
   }
-  function scheduleIdleStop(){if(idleTimer)clearTimeout(idleTimer);idleTimer=setTimeout(()=>stopWorker('Stopped after 20 idle minutes'),20*60_000)}
-  async function generate(){try{
-    busy=true;images=[];width=validDimension(width);height=validDimension(height);const ready=await ensureWorker();message='Submitting Krea 2 workflow…';
-    const job=await submit(ready.id,krea2Workflow(prompt,seed,width,height,providerName));promptId=job.prompt_id;if(!promptId)throw new Error('ComfyUI did not return a prompt ID');
-    for(;;){await sleep(1500);const result=await history(ready.id,promptId);const record:ComfyHistory|undefined=result[promptId];const outputImages=Object.values(record?.outputs||{}).flatMap(output=>output.images||[]);if(outputImages.length){images=outputImages.map(image=>imageUrl(ready.id,image));message='Persisting images…';const saved=await Promise.all(images.map(url=>saveRemoteImage(url,prompt)));library=[...saved.map(displayUrl),...library];message=`Generated and saved ${images.length} image${images.length===1?'':'s'}`;break}if(record?.status?.status_str==='error')throw new Error('ComfyUI generation failed');message='Generating with Krea 2 Turbo…'}
-    scheduleIdleStop();
-  }catch(error){message=error instanceof Error?error.message:String(error)}finally{busy=false;promptId=null}}
-  async function cancelJob(){if(worker&&promptId){await cancel(worker.id,promptId);busy=false;promptId=null;message='Generation cancelled';scheduleIdleStop()}}
-  async function stopWorker(done='Worker terminated'){if(!worker)return;const id=worker.id;worker=null;sessionStorage.removeItem('flujo.runpod.worker');if(idleTimer)clearTimeout(idleTimer);try{await terminate(id);message=done}catch(error){message=error instanceof Error?error.message:String(error)}}
-  async function saveProvider(){setRunPodSettings(apiKey);try{const result=await health();configured=result.configured;providerName=result.provider;message=result.configured?'Provider settings ready':'API key is required'}catch(error){configured=false;message=error instanceof Error?error.message:String(error)}}
-  async function refreshWorkers(){try{workersBusy=true;const result=await listPods();workers=Array.isArray(result)?result:(result.pods||[]);const checks=await Promise.all(workers.map(async item=>[item.id,(await runtimeHealth(item.id)).ready] as const));workerReady=Object.fromEntries(checks)}catch(error){message=error instanceof Error?error.message:String(error)}finally{workersBusy=false}}
-  function openWorkers(){tab='workers';refreshWorkers()}
-  async function terminateListed(item:Pod){if(item.id===worker?.id){await stopWorker()}else await terminate(item.id);await refreshWorkers()}
+
+  function selectRunner(id: string) {
+    selectedRunnerId = id;
+    const definition = runners.find((runner) => runner.id === id);
+    const next: Record<string, unknown> = {};
+    for (const [name, property] of Object.entries(definition?.inputSchema.properties || {})) {
+      next[name] = property.default ?? defaultValue(name, property);
+    }
+    inputs = next;
+    instance = null;
+    phase = "idle";
+    detail = "Runner starts on the first run";
+  }
+
+  function defaultValue(name: string, property: SchemaProperty): unknown {
+    if (name === "seed") return Math.floor(Math.random() * 2_147_483_647);
+    if (name === "width" || name === "height") return 1024;
+    if (property.type === "array") return [];
+    if (property.type === "boolean") return false;
+    return "";
+  }
+
+  function updateInput(name: string, value: unknown) {
+    inputs = { ...inputs, [name]: value };
+  }
+
+  function useRatio(width: number, height: number) {
+    inputs = { ...inputs, width, height };
+  }
+
+  async function ensureRunner(token: number): Promise<RunnerInstance> {
+    let spun = false;
+    if (!instance || instance.runnerId !== selectedRunnerId) {
+      phase = "spinning";
+      spun = true;
+      detail = `Spinning ${selectedRunner?.name || "runner"}`;
+      try {
+        instance = await api.spin(selectedRunnerId);
+      } catch (error) {
+        const active = await api.instances().catch(() => []);
+        const started = active.find((candidate) => candidate.runnerId === selectedRunnerId);
+        if (!started) throw error;
+        instance = await api.instance(started.id).catch(() => started);
+      }
+    }
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      if (token !== runToken) throw new Error("Run cancelled");
+      const status = await api.ready(instance.id).catch(() => ({ ready: false }));
+      if (status.ready) {
+        instance = await api.instance(instance.id);
+        if (spun) {
+          detail = `Checking ${selectedRunner?.dependencies.length || 0} dependencies`;
+          const report = await api.dependencies(instance.id);
+          if (!report.ok) {
+            const failed = instance;
+            const message = report.errors
+              .map((error) => `${error.label}: ${error.message}`)
+              .join("\n");
+            instance = null;
+            await api.stop(failed.id).catch(() => undefined);
+            throw new Error(message);
+          }
+          detail =
+            report.warnings.length > 0
+              ? report.warnings
+                  .map((warning) => `${warning.label}: ${warning.message}`)
+                  .join("\n")
+              : "Runner is ready · dependencies verified";
+        } else {
+          detail = "Runner is ready";
+        }
+        phase = "ready";
+        return instance;
+      }
+      detail = attempt < 3 ? "Starting runner" : "Loading model";
+      await sleep(5_000);
+    }
+    throw new Error("Runner did not become ready within 10 minutes");
+  }
+
+  async function run() {
+    if (!canRun) return;
+    const token = ++runToken;
+    const submittedInputs = { ...inputs, prompt: String(inputs.prompt).trim() };
+    try {
+      const active = await ensureRunner(token);
+      phase = "running";
+      detail = "Submitting run";
+      const response = await api.run(active.id, runnerWorkflow(submittedInputs));
+      runId = response.prompt_id;
+      for (;;) {
+        await sleep(1_500);
+        if (token !== runToken) return;
+        const history = await api.runStatus(active.id, runId);
+        const record = history[runId];
+        const images = Object.values(record?.outputs || {}).flatMap((output) => output.images || []);
+        if (images.length > 0) {
+          const created = images.map((image) => ({
+            url: imageUrl(active, image),
+            prompt: String(submittedInputs.prompt),
+            inputs: submittedInputs,
+          }));
+          results = [...created, ...results];
+          selected = created[0];
+          phase = "ready";
+          detail = `Run completed · ${created.length} output${created.length === 1 ? "" : "s"}`;
+          updateInput("seed", Math.floor(Math.random() * 2_147_483_647));
+          return;
+        }
+        if (record?.status?.status_str === "error") throw new Error("Runner failed this run");
+        detail = "Runner is rendering";
+      }
+    } catch (error) {
+      if (token !== runToken) return;
+      phase = "error";
+      detail = errorMessage(error);
+    } finally {
+      if (token === runToken) runId = "";
+    }
+  }
+
+  async function cancelRun() {
+    const active = instance;
+    const activeRun = runId;
+    ++runToken;
+    runId = "";
+    phase = active ? "ready" : "idle";
+    detail = "Run cancelled";
+    if (active && activeRun) await api.cancelRun(active.id, activeRun).catch(() => undefined);
+  }
+
+  function reuse(result: Result) {
+    inputs = { ...result.inputs };
+    selected = null;
+  }
+
+  const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+  const errorMessage = (error: unknown) => error instanceof Error ? error.message : String(error);
 </script>
-<svelte:head><title>Flujo v0.1</title></svelte:head>
-<header><b><i></i>flujo</b><nav><button class:active={tab==='create'} onclick={()=>tab='create'}>Create</button><button class:active={tab==='library'} onclick={()=>tab='library'}>Library</button><button class:active={tab==='workers'} onclick={openWorkers}>Workers</button><button class:active={tab==='settings'} onclick={()=>tab='settings'}>Settings</button></nav><span class="status"><em class:ok={configured&&!busy} class:working={busy}></em>{message}</span></header>
-{#if tab==='create'}<main><section class="results">{#each images as image}<img src={image} alt="Generated result">{/each}{#if busy}<div class="loading"><span></span>{message}</div>{/if}</section><section class="composer"><textarea bind:value={prompt} placeholder="Describe an image"></textarea><div><label>Seed <input type="number" bind:value={seed}></label><label>W <input type="number" bind:value={width}></label><label>H <input type="number" bind:value={height}></label>{#if busy}<button class="danger" onclick={cancelJob}>Cancel</button>{/if}<button class="go" disabled={busy||!configured} onclick={generate}>Generate</button></div></section></main>
-{:else if tab==='library'}<main><h1>Library</h1>{#if library.length===0}<p class="muted">Generated images from this session appear here.</p>{/if}<section class="results">{#each library as image}<img src={image} alt="Generated result">{/each}</section></main>
-{:else if tab==='workers'}<main><div class="pagehead"><div><h1>Workers</h1><p class="muted">{providerName==='remote-comfy'?'ComfyUI running on this machine.':'Normal RunPod Pods visible to this API key.'}</p></div><button disabled={workersBusy||!configured} onclick={refreshWorkers}>{workersBusy?'Refreshing…':'Refresh'}</button></div>{#if !configured}<section class="card"><p>The compute provider is not configured.</p></section>{:else if workersBusy&&workers.length===0}<section class="card"><p>Loading workers…</p></section>{:else if workers.length===0}<section class="card"><p>No workers found.</p></section>{:else}<section class="workergrid">{#each workers as item}<article class="card workercard"><div class="worker-title"><div><h2>{item.name||'Flujo worker'}</h2><code>{item.id}</code></div><span class:ready={workerReady[item.id]} class="workerbadge">{workerReady[item.id]?'Ready':item.desiredStatus||'Starting'}</span></div>{#if providerName!=='remote-comfy'}<dl><div><dt>GPU</dt><dd>{item.machine?.gpuDisplayName||'Allocating…'}</dd></div><div><dt>Price</dt><dd>{item.costPerHr===undefined?'—':`$${item.costPerHr.toFixed(2)}/hr`}</dd></div><div><dt>Image</dt><dd>{item.imageName||'Flujo template'}</dd></div><div><dt>ComfyUI</dt><dd>{workerReady[item.id]?`https://${item.id}-8188.proxy.runpod.net`:'Not ready'}</dd></div></dl><div class="actions"><button class="danger" onclick={()=>terminateListed(item)}>Terminate Pod</button></div>{:else}<p class="muted">Managed outside Flujo; start and stop it on this machine.</p>{/if}</article>{/each}</section>{/if}</main>
-{:else}<main><h1>Settings</h1>{#if providerName==='remote-comfy'}<section class="card"><h2>Local ComfyUI</h2><p>Flujo is connected to ComfyUI on this machine. Endpoint configuration is server-side so every phone or browser uses the same trusted worker.</p></section><section class="card"><h2>Workflow</h2><p>Krea 2 Turbo SVDQuant W4A4 rank-256 act-aware · identity LoRA · 8 steps · 1 GB VRAM reserve at ComfyUI startup.</p></section>{:else}<section class="card"><h2>RunPod</h2><p>Enter an API key for this browser session.</p><label class="field"><span>API key</span><div><input type={showKey?'text':'password'} bind:value={apiKey} autocomplete="off" placeholder="rpa_…"><button onclick={()=>showKey=!showKey}>{showKey?'Hide':'Show'}</button></div></label><button class="go save" onclick={saveProvider}>Save session key</button></section><section class="card"><h2>Compute</h2><p>Krea 2 Turbo FP8 · normal RunPod Pod · automatic start on Generate.</p><div class="worker"><span>{worker?`Pod ${worker.id}`:'Sleeping'}</span>{#if worker}<button class="danger" onclick={()=>stopWorker()}>Terminate now</button>{/if}</div></section>{/if}</main>{/if}
-<style>
-:global(*){box-sizing:border-box}:global(body){margin:0;background:radial-gradient(circle at 85% 0,#171a2a 0,transparent 28%),#0d0f12;color:#f5f7fa;font:14px/1.5 Inter,system-ui}:global(button),:global(input),:global(textarea){font:inherit;color:inherit}header{height:60px;border-bottom:1px solid #2a2f38;display:flex;align-items:center;padding:0 22px;gap:28px;position:sticky;top:0;background:#0d0f12e8;backdrop-filter:blur(14px);z-index:5}header b{font-size:20px}header i{display:inline-block;width:25px;height:25px;border-radius:8px;background:linear-gradient(135deg,#7d8cff,#a07cff);vertical-align:-7px;margin-right:8px}nav{display:flex;gap:5px}button{border:0;border-radius:9px;background:transparent;padding:9px 12px;cursor:pointer;color:#9299a5}button.active,button:hover{background:#1b1f25;color:white}.status{margin-left:auto;color:#9299a5}.status em{width:8px;height:8px;border-radius:50%;display:inline-block;background:#6e7580;margin-right:8px}.status em.ok{background:#55d69d}.status em.working{background:#f0c566;animation:pulse 1s infinite}@keyframes pulse{50%{opacity:.3}}main{max-width:1120px;margin:auto;padding:32px 20px 180px}.results{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.results img,.loading{width:100%;aspect-ratio:1/1;border-radius:16px;background:#1b1f25;object-fit:cover}.loading{display:grid;place-items:center;color:#9299a5;text-align:center;padding:20px}.loading span{width:30px;height:30px;border:3px solid #39404b;border-top-color:#7d8cff;border-radius:50%;animation:spin 1s linear infinite}@keyframes spin{to{transform:rotate(360deg)}}.composer{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);width:min(820px,calc(100vw - 28px));background:#171a1fee;border:1px solid #39404b;border-radius:18px;padding:12px;box-shadow:0 24px 70px #0009}.composer textarea{width:100%;height:70px;resize:none;background:none;border:0;outline:0}.composer>div{display:flex;gap:10px;align-items:center;border-top:1px solid #2a2f38;padding-top:10px}.composer label{color:#9299a5}.composer input{width:90px;background:#1b1f25;border:1px solid #2a2f38;border-radius:7px;padding:7px}.go{background:#7d8cff;color:white;margin-left:auto}.go:disabled{opacity:.4}.danger{color:#ff9ca8}.card{background:#15181d;border:1px solid #2a2f38;border-radius:16px;padding:18px;margin-bottom:14px}.card p,.muted{color:#9299a5}.worker{display:flex;align-items:center;justify-content:space-between;border-top:1px solid #2a2f38;border-bottom:1px solid #2a2f38;padding:12px 0}.field{display:grid;grid-template-columns:150px 1fr;gap:12px;align-items:center;padding:10px 0}.field>div{width:100%}.field input{width:100%;background:#101216;border:1px solid #39404b;border-radius:9px;padding:10px}.field div{display:flex;gap:7px}.field div button{border:1px solid #39404b}.save{margin:12px 0 0 150px}.pagehead,.worker-title,.actions{display:flex;align-items:center;justify-content:space-between;gap:16px}.pagehead h1,.worker-title h2{margin:0}.workergrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.workercard{margin:0}.worker-title code{display:block;color:#7f8794;margin-top:4px}.workerbadge{border:1px solid #4d535e;border-radius:99px;padding:5px 9px;color:#a3aab6}.workerbadge.ready{color:#8ee6bd;border-color:#2d5a49;background:#55d69d0a}.workercard dl{margin:16px 0}.workercard dl div{display:grid;grid-template-columns:75px minmax(0,1fr);gap:10px;padding:7px 0;border-top:1px solid #2a2f38}.workercard dt{color:#7f8794}.workercard dd{margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.actions{justify-content:flex-end}@media(max-width:700px){nav{display:none}.status{max-width:190px;white-space:nowrap;overflow:hidden}.results{grid-template-columns:repeat(2,1fr)}.composer label:nth-child(n+2){display:none}.field{grid-template-columns:1fr}.save{margin-left:0}.workergrid{grid-template-columns:1fr}}
-</style>
+
+<svelte:head>
+  <title>Flujo — Runner studio</title>
+  <meta name="description" content="Spin a model runner and turn prompts into images." />
+</svelte:head>
+
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="wordmark"><span class="mark"></span><span>flujo</span></div>
+    <button class="new-button" onclick={() => { selected = null; updateInput("prompt", ""); }}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      New run
+    </button>
+    <div class="side-section">
+      <p class="side-label">This session</p>
+      {#if results.length === 0}
+        <p class="empty-history">Completed runs will appear here.</p>
+      {:else}
+        <div class="history-grid">
+          {#each results as result}
+            <button class:active={selected?.url === result.url} onclick={() => selected = result} aria-label="Open run output">
+              <img src={result.url} alt="" />
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+    <div class="runtime-card">
+      <div class="status-line"><span class:phase-error={phase === "error"} class:phase-busy={busy}></span>{phase}</div>
+      <strong>{selectedRunner?.name || "No runner"}</strong>
+      <small>{detail}</small>
+    </div>
+  </aside>
+
+  <main>
+    <header>
+      <div><p class="kicker">Runner studio</p><h1>Turn an idea into an image.</h1></div>
+      <label class="runner-select">
+        <span>Runner</span>
+        <select value={selectedRunnerId} disabled={busy} onchange={(event) => selectRunner(event.currentTarget.value)}>
+          {#each runners as runner}<option value={runner.id}>{runner.name}</option>{/each}
+        </select>
+      </label>
+    </header>
+
+    <section class="workspace" aria-live="polite">
+      {#if selected}
+        <div class="result-stage">
+          <img src={selected.url} alt={selected.prompt} />
+          <div class="image-actions"><button onclick={() => reuse(selected!)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v6h6M20 20v-6h-6M5.5 15a7 7 0 0 0 12 2M18.5 9a7 7 0 0 0-12-2" /></svg>Reuse settings</button></div>
+          <div class="result-meta"><span>{selected.prompt}</span><span>Seed {String(selected.inputs.seed)}</span></div>
+        </div>
+      {:else if busy}
+        <div class="loading-stage"><div class="orb"><span></span></div><p>{phase === "spinning" ? "Spinning your runner" : "Creating your image"}</p><small>{detail}</small><button onclick={cancelRun}>Cancel</button></div>
+      {:else}
+        <div class="blank-stage"><div class="spark-mark"><span></span><span></span><span></span></div><h2>Ready when you are.</h2><p>The selected runner exposes its inputs. Add a prompt, tune the run, and create.</p></div>
+      {/if}
+    </section>
+
+    <section class="composer">
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" value={String(inputs.prompt || "")} oninput={(event) => updateInput("prompt", event.currentTarget.value)} placeholder="A quiet coastal motel at blue hour, cinematic light, shot on 35mm…" rows="3"></textarea>
+      <div class="composer-toolbar">
+        <div class="controls">
+          <div class="ratio-control">
+            {#each ratios as ratio}
+              <button class:active={Number(inputs.width) === ratio.width && Number(inputs.height) === ratio.height} onclick={() => useRatio(ratio.width, ratio.height)}>{ratio.label}</button>
+            {/each}
+          </div>
+          <button class:open={settingsOpen} class="control-button" onclick={() => settingsOpen = !settingsOpen}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6" /></svg>Inputs</button>
+        </div>
+        {#if busy}
+          <button class="cancel-button" onclick={cancelRun}>Cancel run</button>
+        {:else}
+          <button class="generate-button" disabled={!canRun} onclick={run}>Run <span>⌘↵</span></button>
+        {/if}
+      </div>
+
+      {#if settingsOpen}
+        <div class="advanced-panel">
+          {#each properties.filter(([name]) => name !== "prompt") as [name, property]}
+            <label class:wide-input={property.type === "array"}>
+              <span>{property.title || name}</span>
+              {#if property.type === "number" || property.type === "integer"}
+                <input type="number" value={Number(inputs[name] || 0)} min={property.minimum} max={property.maximum} step={property.multipleOf || "any"} oninput={(event) => updateInput(name, Number(event.currentTarget.value))} />
+              {:else if property.type === "boolean"}
+                <input type="checkbox" checked={Boolean(inputs[name])} onchange={(event) => updateInput(name, event.currentTarget.checked)} />
+              {:else if property.type === "array"}
+                <textarea class="json-input" value={JSON.stringify(inputs[name] || [])} oninput={(event) => { try { updateInput(name, JSON.parse(event.currentTarget.value)); } catch { /* keep last valid schema value */ } }}></textarea>
+              {:else}
+                <input value={String(inputs[name] || "")} oninput={(event) => updateInput(name, event.currentTarget.value)} />
+              {/if}
+            </label>
+          {/each}
+        </div>
+      {/if}
+    </section>
+  </main>
+</div>

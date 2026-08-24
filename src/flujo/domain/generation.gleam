@@ -7,7 +7,7 @@ import flujo/domain/non_empty.{type NonEmpty}
 import flujo/domain/value.{
   type AssetId, type GenerationId, type GenerationItemId, type Instant,
   type LoraId, type LoraWeight, type ModelId, type PositiveInt, type Progress,
-  type Prompt, type Seed, type WorkerId,
+  type Prompt, type Seed,
 }
 import gleam/bool
 import gleam/list
@@ -181,9 +181,8 @@ pub type RenderedImage {
 
 pub type ItemState {
   Queued(queued_at: Instant)
-  Assigned(worker: WorkerId, assigned_at: Instant)
-  Running(worker: WorkerId, started_at: Instant, progress: ProgressState)
-  Persisting(worker: WorkerId, rendered: RenderedImage)
+  Running(started_at: Instant, progress: ProgressState)
+  Persisting(rendered: RenderedImage)
   Succeeded(asset: AssetId, completed_at: Instant)
   Failed(failure: GenerationFailure, failed_at: Instant)
   Cancelled(cancelled_at: Instant)
@@ -249,11 +248,9 @@ fn summarize(summary: Summary, item: GenerationItem) -> Summary {
   case item.state {
     Queued(_) ->
       Summary(total + 1, queued + 1, active, succeeded, failed, cancelled)
-    Assigned(_, _) ->
+    Running(_, _) ->
       Summary(total + 1, queued, active + 1, succeeded, failed, cancelled)
-    Running(_, _, _) ->
-      Summary(total + 1, queued, active + 1, succeeded, failed, cancelled)
-    Persisting(_, _) ->
+    Persisting(_) ->
       Summary(total + 1, queued, active + 1, succeeded, failed, cancelled)
     Succeeded(_, _) ->
       Summary(total + 1, queued, active, succeeded + 1, failed, cancelled)

@@ -1,4 +1,4 @@
-name: Publish Krea 2 worker image
+name: Publish Krea 2 runner image
 
 on:
   workflow_dispatch:
@@ -9,7 +9,7 @@ on:
         default: v0.1
   push:
     tags:
-      - "worker-v*"
+      - "runner-v*"
 
 permissions:
   contents: read
@@ -39,14 +39,14 @@ jobs:
         shell: bash
         run: |
           tag="${{ inputs.tag }}"
-          if [[ -z "$tag" ]]; then tag="${GITHUB_REF_NAME#worker-}"; fi
+          if [[ -z "$tag" ]]; then tag="${GITHUB_REF_NAME#runner-}"; fi
           echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/flujo-krea2:${tag}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          context: worker
-          file: worker/Dockerfile
+          context: runner
+          file: runner/Dockerfile
           platforms: linux/amd64
           push: true
           tags: ${{ steps.image.outputs.name }}

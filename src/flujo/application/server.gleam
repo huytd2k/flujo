@@ -1,5 +1,6 @@
 import envoy
-import flujo/adapters/runpod_pods as runpod
+import flujo/adapters/comfy as runtime
+import flujo/adapters/docker
 import flujo/static
 import gleam/bit_array
 import gleam/bytes_tree
@@ -10,6 +11,7 @@ import gleam/http/response.{type Response}
 import gleam/int
 import gleam/json
 import gleam/list
+import gleam/option
 import gleam/result
 import gleam/string
 import mist.{type Connection, type ResponseData}
@@ -30,49 +32,11 @@ pub fn main() {
 }
 
 type Provider {
-  RemoteComfy(url: String, public_url: String)
-  RunPod(config: Result(runpod.Config, Nil))
+  Docker
 }
 
 fn load_config() -> Provider {
-  case envoy.get("FLUJO_PROVIDER") {
-    Ok("runpod") -> RunPod(load_runpod_config())
-    _ ->
-      case envoy.get("COMFYUI_URL") {
-        Ok(value) ->
-          case normalize_url(value) {
-            "" -> RemoteComfy("http://127.0.0.1:8188", load_public_url())
-            url -> RemoteComfy(url, load_public_url())
-          }
-        Error(_) -> RemoteComfy("http://127.0.0.1:8188", load_public_url())
-      }
-  }
-}
-
-fn load_runpod_config() -> Result(runpod.Config, Nil) {
-  case envoy.get("RUNPOD_API_KEY") {
-    Ok(value) ->
-      case string.trim(value) {
-        "" -> Error(Nil)
-        api_key -> Ok(runpod.Config(api_key))
-      }
-    Error(_) -> Error(Nil)
-  }
-}
-
-fn load_public_url() -> String {
-  case envoy.get("COMFYUI_PUBLIC_URL") {
-    Ok(value) -> normalize_url(value)
-    Error(_) -> ""
-  }
-}
-
-fn normalize_url(value: String) -> String {
-  let value = string.trim(value)
-  case string.ends_with(value, "/") {
-    True -> string.drop_end(value, 1)
-    False -> value
-  }
+  Docker
 }
 
 fn handle(
@@ -89,22 +53,30 @@ fn handle(
           #("ok", json.bool(True)),
           #("configured", json.bool(provider_configured(provider))),
           #("provider", json.string(provider_name(provider))),
-          #("imageBaseUrl", json.string(provider_public_url(provider))),
+          #("imageBaseUrl", json.string("")),
         ])
           |> json.to_string,
       )
-    Post, ["api", "workers"] -> provision_worker(provider)
-    Get, ["api", "workers"] -> list_workers(provider)
-    Get, ["api", "workers", pod_id] -> get_worker(provider, pod_id)
-    Get, ["api", "workers", pod_id, "health"] ->
-      runtime_readiness(provider_health(provider, pod_id))
-    Delete, ["api", "workers", pod_id] -> terminate_worker(provider, pod_id)
-    Post, ["api", "workers", pod_id, "generations"] ->
-      with_body(request, fn(body) { provider_submit(provider, pod_id, body) })
-    Get, ["api", "workers", pod_id, "jobs", prompt_id] ->
-      with_operation(provider_history(provider, pod_id, prompt_id), 200)
-    Post, ["api", "workers", pod_id, "jobs", _, "cancel"] ->
-      with_operation(provider_cancel(provider, pod_id), 200)
+    Get, ["api", "runners"] -> respond(200, docker.definitions())
+    Get, ["api", "runner-instances"] -> docker_instances()
+    Post, ["api", "runners", runner_id, "instances"] -> docker_start(runner_id)
+    Get, ["api", "runner-instances", instance_id] ->
+      get_runner_instance(instance_id)
+    Get, ["api", "runner-instances", instance_id, "health"] ->
+      runtime_readiness(provider_health(provider, instance_id))
+    Get, ["api", "runner-instances", instance_id, "dependencies"] ->
+      runner_dependencies(instance_id)
+    Get, ["api", "runner-instances", instance_id, "outputs"] ->
+      runner_output(request, instance_id)
+    Post, ["api", "runner-instances", instance_id, "runs"] ->
+      with_body(request, fn(body) {
+        provider_submit(provider, instance_id, body)
+      })
+    Get, ["api", "runner-instances", instance_id, "runs", run_id] ->
+      with_operation(provider_history(provider, instance_id, run_id), 200)
+    Post, ["api", "runner-instances", instance_id, "runs", _, "cancel"] ->
+      with_operation(provider_cancel(provider, instance_id), 200)
+    Delete, ["api", "runner-instances", instance_id] -> docker_stop(instance_id)
     Get, ["api", ..] -> respond(404, error_json("not_found"))
     Get, ["assets", ..asset_path] ->
       serve_file("/app/public/assets/" <> string.join(asset_path, "/"))
@@ -114,32 +86,74 @@ fn handle(
 }
 
 fn runtime_readiness(
-  result: Result(String, runpod.Error),
+  result: Result(String, runtime.Error),
 ) -> Response(ResponseData) {
   case result {
     Ok(_) ->
       respond(200, json.object([#("ready", json.bool(True))]) |> json.to_string)
-    Error(runpod.Upstream(404, _)) ->
+    Error(runtime.Upstream(404, _)) ->
       respond(
         200,
         json.object([#("ready", json.bool(False))]) |> json.to_string,
       )
-    Error(runpod.Upstream(502, _)) ->
+    Error(runtime.Upstream(502, _)) ->
       respond(
         200,
         json.object([#("ready", json.bool(False))]) |> json.to_string,
       )
-    Error(runpod.Upstream(503, _)) ->
+    Error(runtime.Upstream(503, _)) ->
       respond(
         200,
         json.object([#("ready", json.bool(False))]) |> json.to_string,
       )
-    Error(runpod.Transport) ->
+    Error(runtime.Transport) ->
       respond(
         200,
         json.object([#("ready", json.bool(False))]) |> json.to_string,
       )
     Error(error) -> with_operation(Error(error), 200)
+  }
+}
+
+fn runner_dependencies(id: String) -> Response(ResponseData) {
+  case docker.dependencies(id) {
+    Ok(report) -> respond(200, report)
+    Error(error) -> docker_error(error)
+  }
+}
+
+fn runner_output(
+  request: Request(Connection),
+  id: String,
+) -> Response(ResponseData) {
+  case docker.port(id) {
+    Error(error) -> docker_error(error)
+    Ok(port) -> {
+      let query = option.unwrap(request.query, "")
+      let suffix = case query {
+        "" -> ""
+        value -> "?" <> value
+      }
+      case runtime.output("http://127.0.0.1:" <> port <> "/view" <> suffix) {
+        Ok(#(status, content_type, body)) ->
+          response.new(status)
+          |> response.set_header("content-type", content_type)
+          |> response.set_header(
+            "cache-control",
+            "public, max-age=31536000, immutable",
+          )
+          |> response.set_body(mist.Bytes(bytes_tree.from_bit_array(body)))
+        Error(message) ->
+          respond(
+            502,
+            json.object([
+              #("error", json.string("runner_output_unavailable")),
+              #("message", json.string(message)),
+            ])
+              |> json.to_string,
+          )
+      }
+    }
   }
 }
 
@@ -180,126 +194,68 @@ fn content_type(path: String) -> String {
 }
 
 fn request_config(
-  request: Request(Connection),
+  _request: Request(Connection),
   provider: Provider,
 ) -> Provider {
-  case provider, request.get_header(request, "x-flujo-runpod-key") {
-    RemoteComfy(_, _), _ -> provider
-    RunPod(_), Ok(api_key) ->
-      case string.trim(api_key) {
-        "" -> provider
-        api_key -> RunPod(Ok(runpod.Config(api_key)))
-      }
-    RunPod(_), Error(_) -> provider
-  }
+  provider
 }
 
 fn provider_configured(provider: Provider) -> Bool {
   case provider {
-    RemoteComfy(_, _) -> True
-    RunPod(config) -> result.is_ok(config)
+    Docker -> True
   }
 }
 
 fn provider_name(provider: Provider) -> String {
   case provider {
-    RemoteComfy(_, _) -> "remote-comfy"
-    RunPod(_) -> "runpod-pods"
+    Docker -> "docker-runners"
   }
 }
 
-fn provider_public_url(provider: Provider) -> String {
-  case provider {
-    RemoteComfy(_, public_url) -> public_url
-    RunPod(_) -> ""
-  }
-}
-
-fn remote_worker() -> String {
-  json.object([
-    #("id", json.string("remote-comfy")),
-    #("name", json.string("Remote ComfyUI")),
-    #("desiredStatus", json.string("RUNNING")),
-  ])
-  |> json.to_string
-}
-
-fn provision_worker(provider: Provider) -> Response(ResponseData) {
-  case provider {
-    RemoteComfy(_, _) -> respond(200, remote_worker())
-    RunPod(config) -> with_config(config, runpod.provision, 201)
-  }
-}
-
-fn list_workers(provider: Provider) -> Response(ResponseData) {
-  case provider {
-    RemoteComfy(_, _) -> respond(200, "[" <> remote_worker() <> "]")
-    RunPod(config) -> with_config(config, runpod.pods, 200)
-  }
-}
-
-fn get_worker(provider: Provider, id: String) -> Response(ResponseData) {
-  case provider {
-    RemoteComfy(_, _) -> respond(200, remote_worker())
-    RunPod(config) ->
-      with_config(config, fn(value) { runpod.pod(value, id) }, 200)
-  }
-}
-
-fn terminate_worker(provider: Provider, id: String) -> Response(ResponseData) {
-  case provider {
-    RemoteComfy(_, _) ->
-      respond(409, error_json("remote_comfy_is_managed_externally"))
-    RunPod(config) ->
-      with_config(config, fn(value) { runpod.terminate(value, id) }, 200)
+fn get_runner_instance(id: String) -> Response(ResponseData) {
+  case docker.port(id) {
+    Ok(port) -> respond(200, runner_instance_json(id, port))
+    Error(error) -> docker_error(error)
   }
 }
 
 fn provider_health(
-  provider: Provider,
+  _provider: Provider,
   id: String,
-) -> Result(String, runpod.Error) {
-  case provider {
-    RemoteComfy(url, _) -> runpod.remote_health(url)
-    RunPod(_) -> runpod.runtime_health(id)
-  }
+) -> Result(String, runtime.Error) {
+  use port <- result.try(docker.port(id) |> docker_to_runtime_error)
+  runtime.health("http://127.0.0.1:" <> port)
 }
 
 fn provider_submit(
-  provider: Provider,
+  _provider: Provider,
   id: String,
   body: String,
-) -> Result(String, runpod.Error) {
-  case provider {
-    RemoteComfy(url, _) -> runpod.remote_submit(url, body)
-    RunPod(_) -> runpod.submit(id, body)
-  }
+) -> Result(String, runtime.Error) {
+  use port <- result.try(docker.port(id) |> docker_to_runtime_error)
+  runtime.submit("http://127.0.0.1:" <> port, body)
 }
 
 fn provider_history(
-  provider: Provider,
+  _provider: Provider,
   id: String,
   prompt_id: String,
-) -> Result(String, runpod.Error) {
-  case provider {
-    RemoteComfy(url, _) -> runpod.remote_history(url, prompt_id)
-    RunPod(_) -> runpod.history(id, prompt_id)
-  }
+) -> Result(String, runtime.Error) {
+  use port <- result.try(docker.port(id) |> docker_to_runtime_error)
+  runtime.history("http://127.0.0.1:" <> port, prompt_id)
 }
 
 fn provider_cancel(
-  provider: Provider,
+  _provider: Provider,
   id: String,
-) -> Result(String, runpod.Error) {
-  case provider {
-    RemoteComfy(url, _) -> runpod.remote_cancel(url)
-    RunPod(_) -> runpod.cancel(id)
-  }
+) -> Result(String, runtime.Error) {
+  use port <- result.try(docker.port(id) |> docker_to_runtime_error)
+  runtime.cancel("http://127.0.0.1:" <> port)
 }
 
 fn with_body(
   request: Request(Connection),
-  operation: fn(String) -> Result(String, runpod.Error),
+  operation: fn(String) -> Result(String, runtime.Error),
 ) -> Response(ResponseData) {
   case mist.read_body(request, max_body_limit: 10_000_000) {
     Ok(request) ->
@@ -311,42 +267,86 @@ fn with_body(
   }
 }
 
-fn with_config(
-  config: Result(runpod.Config, Nil),
-  operation: fn(runpod.Config) -> Result(String, runpod.Error),
-  success_status: Int,
-) -> Response(ResponseData) {
-  case config {
-    Error(_) -> respond(503, error_json("runpod_not_configured"))
-    Ok(value) -> with_operation(operation(value), success_status)
-  }
-}
-
 fn with_operation(
-  operation: Result(String, runpod.Error),
+  operation: Result(String, runtime.Error),
   success_status: Int,
 ) -> Response(ResponseData) {
   case operation {
     Ok("") -> respond(success_status, "{}")
     Ok(body) -> respond(success_status, body)
-    Error(runpod.Upstream(status, "")) ->
+    Error(runtime.Upstream(status, "")) ->
       respond(status, error_json("upstream_error"))
-    Error(runpod.Upstream(status, body)) -> respond(status, body)
-    Error(runpod.InvalidUrl) -> respond(500, error_json("invalid_upstream_url"))
-    Error(runpod.InvalidResponse) ->
+    Error(runtime.Upstream(status, body)) -> respond(status, body)
+    Error(runtime.InvalidUrl) ->
+      respond(500, error_json("invalid_upstream_url"))
+    Error(runtime.InvalidResponse) ->
       respond(502, error_json("invalid_upstream_response"))
-    Error(runpod.Transport) -> respond(502, error_json("upstream_unreachable"))
+    Error(runtime.Transport) -> respond(502, error_json("upstream_unreachable"))
   }
+}
+
+fn docker_start(runner_id: String) -> Response(ResponseData) {
+  case docker.start(runner_id) {
+    Ok(id) ->
+      case docker.port(id) {
+        Ok(port) -> respond(201, runner_instance_json(id, port))
+        Error(error) -> docker_error(error)
+      }
+    Error(error) -> docker_error(error)
+  }
+}
+
+fn docker_instances() -> Response(ResponseData) {
+  case docker.instances() {
+    Ok(body) -> respond(200, body)
+    Error(error) -> docker_error(error)
+  }
+}
+
+fn docker_stop(id: String) -> Response(ResponseData) {
+  case docker.stop(id) {
+    Ok(_) -> respond(200, "{}")
+    Error(error) -> docker_error(error)
+  }
+}
+
+fn docker_error(error: docker.Error) -> Response(ResponseData) {
+  case error {
+    docker.UnknownRunner -> respond(404, error_json("unknown_runner"))
+    docker.DockerUnavailable(message) ->
+      respond(
+        503,
+        json.object([
+          #("error", json.string("docker_error")),
+          #("message", json.string(message)),
+        ])
+          |> json.to_string,
+      )
+  }
+}
+
+fn docker_to_runtime_error(
+  value: Result(String, docker.Error),
+) -> Result(String, runtime.Error) {
+  result.map_error(value, fn(_) { runtime.Transport })
+}
+
+fn runner_instance_json(id: String, port: String) -> String {
+  json.object([
+    #("id", json.string(id)),
+    #("name", json.string("Krea 2 runner")),
+    #("desiredStatus", json.string("RUNNING")),
+    #("port", json.string(port)),
+    #("runnerId", json.string("krea2-svdquant")),
+  ])
+  |> json.to_string
 }
 
 fn respond(status: Int, body: String) -> Response(ResponseData) {
   response.new(status)
   |> response.set_header("content-type", "application/json; charset=utf-8")
   |> response.set_header("access-control-allow-origin", "*")
-  |> response.set_header(
-    "access-control-allow-headers",
-    "content-type, x-flujo-runpod-key",
-  )
+  |> response.set_header("access-control-allow-headers", "content-type")
   |> response.set_header(
     "access-control-allow-methods",
     "GET, POST, DELETE, OPTIONS",

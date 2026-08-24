@@ -40,7 +40,7 @@ RUN mv /start.sh /start-runpod.sh
 COPY start.sh /start.sh
 RUN chmod 0755 /start.sh /start-runpod.sh
 
-LABEL org.opencontainers.image.title="Flujo Krea 2 Turbo ComfyUI worker" \
+LABEL org.opencontainers.image.title="Flujo Krea 2 Turbo ComfyUI runner" \
       org.opencontainers.image.source="https://github.com/huytd2k/flujo" \
       ai.flujo.model="Comfy-Org/Krea-2:krea2_turbo_fp8_scaled"
 

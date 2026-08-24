@@ -8,9 +8,6 @@ pub opaque type GenerationItemId {
   GenerationItemId(String)
 }
 
-pub opaque type WorkerId {
-  WorkerId(String)
-}
 
 pub opaque type ModelId {
   ModelId(String)
@@ -73,12 +70,6 @@ pub fn generation_item_id(raw: String) -> Result(GenerationItemId, ValueError) {
   }
 }
 
-pub fn worker_id(raw: String) -> Result(WorkerId, ValueError) {
-  case string.trim(raw) {
-    "" -> Error(EmptyValue)
-    value -> Ok(WorkerId(value))
-  }
-}
 
 pub fn model_id(raw: String) -> Result(ModelId, ValueError) {
   case string.trim(raw) {

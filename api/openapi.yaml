@@ -1,54 +1,86 @@
 openapi: 3.1.0
-info: {title: Flujo API, version: 0.1.0}
+info:
+  title: Flujo Runner API
+  version: 0.3.0
 paths:
   /api/health:
     get:
-      responses: {'200': {description: Gateway health}}
-  /api/workers:
-    post:
-      description: Return the configured local ComfyUI worker, or provision a RunPod Pod in runpod mode.
-      responses: {'201': {description: RunPod Pod, content: {application/json: {schema: {$ref: '#/components/schemas/Pod'}}}}}
-  /api/workers/{podId}:
+      responses:
+        '200': {description: Backend health}
+  /api/runners:
     get:
-      parameters: [{$ref: '#/components/parameters/PodId'}]
-      responses: {'200': {description: Current RunPod Pod state}}
+      description: List runner definitions and their JSON input/output schemas.
+      responses:
+        '200': {description: Runner definitions}
+  /api/runners/{runnerId}/instances:
+    post:
+      description: Spin an instance of a runner.
+      parameters: [{$ref: '#/components/parameters/RunnerId'}]
+      responses:
+        '201': {description: Runner instance}
+  /api/runner-instances:
+    get:
+      description: List active runner instances.
+      responses:
+        '200': {description: Runner instances}
+  /api/runner-instances/{instanceId}:
+    get:
+      description: Resolve a runner instance and its output port.
+      parameters: [{$ref: '#/components/parameters/InstanceId'}]
+      responses:
+        '200': {description: Runner instance}
     delete:
-      description: Permanently terminate the Pod and end GPU billing.
-      parameters: [{$ref: '#/components/parameters/PodId'}]
-      responses: {'200': {description: Pod terminated}}
-  /api/workers/{podId}/health:
+      description: Stop a runner instance.
+      parameters: [{$ref: '#/components/parameters/InstanceId'}]
+      responses:
+        '200': {description: Runner stopped}
+  /api/runner-instances/{instanceId}/health:
     get:
-      description: Probe ComfyUI through the RunPod HTTPS proxy.
-      parameters: [{$ref: '#/components/parameters/PodId'}]
-      responses: {'200': {description: ComfyUI ready}, '502': {description: Runtime not ready}}
-  /api/workers/{podId}/generations:
-    post:
-      description: Submit a ComfyUI API workflow to a ready Pod.
-      parameters: [{$ref: '#/components/parameters/PodId'}]
-      requestBody: {required: true, content: {application/json: {schema: {$ref: '#/components/schemas/PromptRequest'}}}}
-      responses: {'200': {description: Prompt accepted, content: {application/json: {schema: {$ref: '#/components/schemas/PromptJob'}}}}}
-  /api/workers/{podId}/jobs/{promptId}:
+      description: Check whether a runner can accept runs.
+      parameters: [{$ref: '#/components/parameters/InstanceId'}]
+      responses:
+        '200': {description: Runner readiness}
+  /api/runner-instances/{instanceId}/dependencies:
     get:
-      parameters: [{$ref: '#/components/parameters/PodId'}, {$ref: '#/components/parameters/PromptId'}]
-      responses: {'200': {description: ComfyUI history and output metadata}}
-  /api/workers/{podId}/jobs/{promptId}/cancel:
+      description: Check every declared dependency after spinning a runner, including GPU count and file MD5.
+      parameters: [{$ref: '#/components/parameters/InstanceId'}]
+      responses:
+        '200': {description: Complete dependency report with errors and warnings}
+  /api/runner-instances/{instanceId}/outputs:
+    get:
+      description: Proxy a generated runner output through the Flujo server.
+      parameters:
+        - {$ref: '#/components/parameters/InstanceId'}
+        - {name: filename, in: query, required: true, schema: {type: string}}
+        - {name: subfolder, in: query, required: false, schema: {type: string}}
+        - {name: type, in: query, required: false, schema: {type: string, default: output}}
+      responses:
+        '200': {description: Generated image bytes}
+        '502': {description: Runner output unavailable}
+  /api/runner-instances/{instanceId}/runs:
     post:
-      parameters: [{$ref: '#/components/parameters/PodId'}, {$ref: '#/components/parameters/PromptId'}]
-      responses: {'200': {description: Execution interrupted}}
+      description: Submit a run to a ready, previously checked runner instance.
+      parameters: [{$ref: '#/components/parameters/InstanceId'}]
+      responses:
+        '200': {description: Run accepted}
+  /api/runner-instances/{instanceId}/runs/{runId}:
+    get:
+      description: Read run status and outputs.
+      parameters:
+        - {$ref: '#/components/parameters/InstanceId'}
+        - {$ref: '#/components/parameters/RunId'}
+      responses:
+        '200': {description: Run status}
+  /api/runner-instances/{instanceId}/runs/{runId}/cancel:
+    post:
+      description: Cancel an active run.
+      parameters:
+        - {$ref: '#/components/parameters/InstanceId'}
+        - {$ref: '#/components/parameters/RunId'}
+      responses:
+        '200': {description: Run cancelled}
 components:
   parameters:
-    PodId: {name: podId, in: path, required: true, schema: {type: string}}
-    PromptId: {name: promptId, in: path, required: true, schema: {type: string}}
-  schemas:
-    Pod:
-      type: object
-      required: [id]
-      properties: {id: {type: string}, desiredStatus: {type: string}, costPerHr: {type: number}}
-    PromptRequest:
-      type: object
-      required: [prompt]
-      properties: {prompt: {type: object, additionalProperties: true}, client_id: {type: string}}
-    PromptJob:
-      type: object
-      required: [prompt_id]
-      properties: {prompt_id: {type: string}, number: {type: integer}, node_errors: {type: object}}
+    RunnerId: {name: runnerId, in: path, required: true, schema: {type: string}}
+    InstanceId: {name: instanceId, in: path, required: true, schema: {type: string}}
+    RunId: {name: runId, in: path, required: true, schema: {type: string}}

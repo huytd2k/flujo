@@ -1,8 +1,7 @@
 # Flujo Krea 2 Pod image
 
-This is a regular RunPod Pod image, not a Serverless worker. It extends the
-official RunPod ComfyUI image and contains the exact model bundle tested by
-Flujo:
+This is a regular RunPod Pod runner. It extends the official RunPod ComfyUI
+image and contains the exact model bundle tested by Flujo:
 
 - `krea2_turbo_fp8_scaled.safetensors`
 - `qwen3vl_4b_fp8_scaled.safetensors`
@@ -21,10 +20,10 @@ Actions workflow.
 ```sh
 docker buildx build \
   --platform linux/amd64 \
-  --file worker/Dockerfile \
+  --file runner/Dockerfile \
   --tag ghcr.io/huytd2k/flujo-krea2:v0.1 \
   --push \
-  worker
+  runner
 ```
 
 The build downloads each model once and checks its Hugging Face LFS SHA-256.
@@ -37,7 +36,7 @@ container registry credential. Then run:
 
 ```sh
 RUNPOD_API_KEY='temporary-key' \
-  worker/create-runpod-template.sh ghcr.io/huytd2k/flujo-krea2:v0.1
+  runner/create-runpod-template.sh ghcr.io/huytd2k/flujo-krea2:v0.1
 ```
 
 The template is private, uses normal Pods (`isServerless: false`), exposes

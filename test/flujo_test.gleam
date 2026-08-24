@@ -5,7 +5,6 @@ import flujo/domain/non_empty
 import flujo/domain/queue
 import flujo/domain/transition
 import flujo/domain/value
-import flujo/domain/worker
 import gleam/list
 import gleeunit
 import gleeunit/should
@@ -32,7 +31,7 @@ pub fn non_empty_and_queue_preserve_invariants_test() {
 }
 
 pub fn complete_generation_phase_is_derived_test() {
-  let #(generation_, _, _, assets) = fixture()
+  let #(generation_, assets) = fixture()
   let assert [asset, ..] = assets
   let complete_items =
     generation_.items
@@ -47,73 +46,25 @@ pub fn complete_generation_phase_is_derived_test() {
 }
 
 pub fn full_pure_core_lifecycle_test() {
-  let #(generation_, model_ref, worker_id, assets) = fixture()
-  let assert Ok(idle_duration) = value.duration(1_200_000)
-  let state = transition.initial(worker.ShutdownAfterIdle(idle_duration))
-
-  let assert Ok(transition.Transition(state, [transition.ProvisionWorker], _)) =
-    transition.transition(state, transition.SubmitGeneration(generation_))
-  let assert Ok(transition.Transition(state, [], _)) =
-    transition.transition(
-      state,
-      transition.WorkerProvisioned(worker_id, value.instant(10)),
-    )
-  let assert Ok(transition.Transition(
-    state,
-    [transition.LoadModel(_, loaded)],
-    _,
-  )) =
-    transition.transition(
-      state,
-      transition.WorkerOnline(worker_id, value.instant(20)),
-    )
-  loaded |> should.equal(model_ref)
-  let assert Ok(transition.Transition(
-    state,
-    [transition.ExecuteItem(_, _, first)],
-    _,
-  )) =
-    transition.transition(
-      state,
-      transition.ModelLoaded(worker_id, model_ref, value.instant(30)),
-    )
-
-  // A stale idle timer is only an observed fact and cannot stop active work.
-  let assert Ok(transition.Transition(unchanged, [], [])) =
-    transition.transition(
-      state,
-      transition.IdleDeadlineReached(worker_id, value.instant(9_999_999)),
-    )
-  unchanged |> should.equal(state)
-
+  let #(generation_, assets) = fixture()
+  let state = transition.initial()
   let item_ids =
     generation_.items |> non_empty.to_list |> list.map(fn(item) { item.id })
   let assert [first_expected, ..] = item_ids
-  first |> should.equal(first_expected)
-  let final_state = run_items(state, item_ids, assets, 100)
 
-  let transition.State(generations, worker_state, final_queue, _) = final_state
+  let assert Ok(transition.Transition(
+    state,
+    [transition.RunItem(_, first)],
+    [transition.GenerationSubmitted(_)],
+  )) = transition.transition(state, transition.SubmitGeneration(generation_))
+  first |> should.equal(first_expected)
+
+  let final_state = run_items(state, item_ids, assets, 100)
+  let transition.State(generations, final_queue) = final_state
   queue.is_empty(final_queue) |> should.be_true
   let assert [completed_generation] = generations
   generation.phase(completed_generation)
   |> should.equal(generation.GenerationComplete)
-  let assert worker.Ready(_, _, idle_since) = worker_state
-  idle_since |> should.equal(value.instant(403))
-
-  let deadline = value.add_duration(idle_since, idle_duration)
-  let assert Ok(transition.Transition(stopping, [transition.StopWorker(id)], _)) =
-    transition.transition(
-      final_state,
-      transition.IdleDeadlineReached(worker_id, deadline),
-    )
-  id |> should.equal(worker_id)
-  let assert Ok(transition.Transition(stopped, [], [])) =
-    transition.transition(
-      stopping,
-      transition.WorkerStopped(worker_id, deadline),
-    )
-  let transition.State(_, final_worker, _, _) = stopped
-  final_worker |> should.equal(worker.Sleeping)
 }
 
 fn run_items(
@@ -150,12 +101,7 @@ fn run_items(
   }
 }
 
-fn fixture() -> #(
-  generation.Generation,
-  model.ModelRef,
-  value.WorkerId,
-  List(value.AssetId),
-) {
+fn fixture() -> #(generation.Generation, List(value.AssetId)) {
   let assert Ok(model_id) = value.model_id("flux-dev")
   let model_ref = model.ModelRef(model_id, "1")
   let assert Ok(max_images) = value.positive_int(2)
@@ -207,17 +153,11 @@ fn fixture() -> #(
     })
   let assert Ok(items) = non_empty.from_list(items)
   let assert Ok(generation_id) = value.generation_id("generation-1")
-  let assert Ok(worker_id) = value.worker_id("worker-1")
   let assets =
     ["asset-1", "asset-2", "asset-3", "asset-4"]
     |> list.map(fn(raw) {
       let assert Ok(id) = value.asset_id(raw)
       id
     })
-  #(
-    generation.Generation(generation_id, value.instant(0), spec, items),
-    model_ref,
-    worker_id,
-    assets,
-  )
+  #(generation.Generation(generation_id, value.instant(0), spec, items), assets)
 }

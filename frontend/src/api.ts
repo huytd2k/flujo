@@ -1,41 +1,161 @@
-export type Pod={id:string;name?:string;desiredStatus?:string;lastStatusChange?:string;costPerHr?:number;imageName?:string;machine?:{gpuDisplayName?:string};runtime?:{uptimeInSeconds?:number}};
-export type PromptJob={prompt_id:string;number?:number;node_errors?:Record<string,unknown>};
-export type ComfyImage={filename:string;subfolder:string;type:string};
-export type ComfyHistory={status?:{completed?:boolean;status_str?:string};outputs?:Record<string,{images?:ComfyImage[]}>};
-let runpodKey=sessionStorage.getItem('flujo.runpod.key')||'';
-let imageBaseUrl='';
-export function runPodSettings(){return {apiKey:runpodKey}}
-export function setRunPodSettings(apiKey:string){runpodKey=apiKey.trim();if(runpodKey)sessionStorage.setItem('flujo.runpod.key',runpodKey);else sessionStorage.removeItem('flujo.runpod.key')}
-async function json<T>(url:string,init:RequestInit={}):Promise<T>{const headers=new Headers(init.headers);if(runpodKey)headers.set('x-flujo-runpod-key',runpodKey);const response=await fetch(url,{...init,headers});const body=await response.json().catch(()=>({error:`HTTP ${response.status}`}));if(!response.ok)throw new Error(body.error||body.message||`HTTP ${response.status}`);return body as T}
-export async function health(){const value=await json<{ok:boolean;configured:boolean;provider:string;imageBaseUrl?:string}>('/api/health');imageBaseUrl=value.imageBaseUrl||'';return value}
-export const provision=()=>json<Pod>('/api/workers',{method:'POST'});
-export const pods=()=>json<Pod[]|{pods?:Pod[]}>('/api/workers');
-export const pod=(id:string)=>json<Pod>(`/api/workers/${encodeURIComponent(id)}`);
-export const runtimeHealth=(id:string)=>json<{ready:boolean}>(`/api/workers/${encodeURIComponent(id)}/health`);
-export const terminate=(id:string)=>json<unknown>(`/api/workers/${encodeURIComponent(id)}`,{method:'DELETE'});
-export const submit=(podId:string,workflow:unknown)=>json<PromptJob>(`/api/workers/${encodeURIComponent(podId)}/generations`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({prompt:workflow,client_id:'flujo-v01'})});
-export const history=(podId:string,promptId:string)=>json<Record<string,ComfyHistory>>(`/api/workers/${encodeURIComponent(podId)}/jobs/${encodeURIComponent(promptId)}`);
-export const cancel=(podId:string,promptId:string)=>json<unknown>(`/api/workers/${encodeURIComponent(podId)}/jobs/${encodeURIComponent(promptId)}/cancel`,{method:'POST'});
-export function imageUrl(podId:string,image:ComfyImage):string{const query=new URLSearchParams({filename:image.filename,subfolder:image.subfolder||'',type:image.type||'output'});if(imageBaseUrl){return `${imageBaseUrl}/view?${query}`}if(podId==='remote-comfy'){return `${location.protocol}//${location.hostname}:8188/view?${query}`}return `https://${podId}-8188.proxy.runpod.net/view?${query}`}
-export function krea2Workflow(prompt:string,seed:number,width:number,height:number,provider='remote-comfy'){if(provider==='remote-comfy')return {
-  '1':{class_type:'Krea2SVDQuantW4A4Loader',inputs:{model_name:'Krea2-Turbo-SVDQuant-W4A4-rank256-actaware.safetensors'}},
-  '2':{class_type:'CLIPLoader',inputs:{clip_name:'qwen3vl_4b_fp8_scaled.safetensors',type:'krea2',device:'default'}},
-  '3':{class_type:'VAELoader',inputs:{vae_name:'qwen_image_vae.safetensors'}},
-  '4':{class_type:'Krea2SVDQuantLoraLoader',inputs:{lora_name:'bld_lora.safetensors',strength:1,adapters:'bypass (exact, slower)',model:['1',0]}},
-  '5':{class_type:'CLIPTextEncode',inputs:{text:prompt,clip:['2',0]}},
-  '6':{class_type:'ConditioningZeroOut',inputs:{conditioning:['5',0]}},
-  '7':{class_type:'EmptySD3LatentImage',inputs:{width,height,batch_size:1}},
-  '8':{class_type:'KSampler',inputs:{model:['4',0],seed,steps:8,cfg:1,sampler_name:'euler',scheduler:'simple',positive:['5',0],negative:['6',0],latent_image:['7',0],denoise:1}},
-  '9':{class_type:'VAEDecode',inputs:{samples:['8',0],vae:['3',0]}},
-  '10':{class_type:'SaveImage',inputs:{images:['9',0],filename_prefix:'flujo-krea2-svdquant'}},
-};return {
-  '1':{class_type:'UNETLoader',inputs:{unet_name:'krea2_turbo_fp8_scaled.safetensors',weight_dtype:'default'}},
-  '2':{class_type:'CLIPLoader',inputs:{clip_name:'qwen3vl_4b_fp8_scaled.safetensors',type:'krea2'}},
-  '3':{class_type:'VAELoader',inputs:{vae_name:'qwen_image_vae.safetensors'}},
-  '4':{class_type:'CLIPTextEncode',inputs:{text:prompt,clip:['2',0]}},
-  '5':{class_type:'ConditioningZeroOut',inputs:{conditioning:['4',0]}},
-  '6':{class_type:'EmptyLatentImage',inputs:{width,height,batch_size:1}},
-  '7':{class_type:'KSampler',inputs:{model:['1',0],seed,steps:8,cfg:1,sampler_name:'euler',scheduler:'simple',positive:['4',0],negative:['5',0],latent_image:['6',0],denoise:1}},
-  '8':{class_type:'VAEDecode',inputs:{samples:['7',0],vae:['3',0]}},
-  '9':{class_type:'SaveImage',inputs:{images:['8',0],filename_prefix:'flujo-krea2'}},
-}}
+export type SchemaProperty = {
+  type?: string;
+  title?: string;
+  description?: string;
+  default?: unknown;
+  minimum?: number;
+  maximum?: number;
+  multipleOf?: number;
+  enum?: unknown[];
+};
+export type DependencyRequirement = {
+  id: string;
+  label: string;
+  kind: "gpu" | "file";
+  minimum?: number;
+  path?: string;
+  md5?: string;
+};
+
+export type DependencyIssue = {
+  id: string;
+  label: string;
+  message: string;
+};
+
+export type DependencyReport = {
+  ok: boolean;
+  checks: Array<{
+    id: string;
+    label: string;
+    status: "ok" | "warning" | "error";
+    detail: string;
+  }>;
+  errors: DependencyIssue[];
+  warnings: DependencyIssue[];
+};
+
+
+export type Runner = {
+  id: string;
+  name: string;
+  image: string;
+  dependencies: DependencyRequirement[];
+  inputSchema: { required?: string[]; properties?: Record<string, SchemaProperty> };
+};
+
+export type RunnerInstance = {
+  id: string;
+  runnerId?: string;
+  port?: string;
+  status?: string;
+};
+
+export type OutputImage = { filename: string; subfolder?: string; type?: string };
+type RunRecord = {
+  status?: { status_str?: string };
+  outputs?: Record<string, { images?: OutputImage[] }>;
+};
+
+const baseUrl = (import.meta.env.VITE_FLUJO_API_URL || "").replace(/\/$/, "");
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const response = await fetch(`${baseUrl}${path}`, init);
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const reported = Array.isArray(body.errors)
+      ? body.errors.map((error: unknown) => {
+          if (!error || typeof error !== "object") return "";
+          const label = "label" in error ? error.label : "";
+          const message = "message" in error ? error.message : "";
+          return [label, message]
+            .filter((value): value is string => typeof value === "string")
+            .join(": ");
+        })
+      : [];
+    const rawNodes: unknown[] = Object.values(body.node_errors || {});
+    const nodeErrors = rawNodes.flatMap((node) => {
+      if (
+        !node ||
+        typeof node !== "object" ||
+        !("errors" in node) ||
+        !Array.isArray(node.errors)
+      ) {
+        return [];
+      }
+      return node.errors.map((error: unknown) => {
+        if (!error || typeof error !== "object") return "";
+        const details = "details" in error ? error.details : "";
+        const message = "message" in error ? error.message : "";
+        return typeof details === "string"
+          ? details
+          : typeof message === "string"
+            ? message
+            : "";
+      });
+    });
+    const upstream =
+      typeof body.error === "object"
+        ? body.error?.message || body.error?.details
+        : body.error;
+    const message =
+      [...reported, ...nodeErrors].filter(Boolean).join("\n") ||
+      body.message ||
+      upstream ||
+      `Request failed (${response.status})`;
+    throw new Error(String(message).replaceAll("_", " "));
+  }
+  return body as T;
+}
+
+const instancePath = (id: string) => `/api/runner-instances/${encodeURIComponent(id)}`;
+
+export const api = {
+  health: () => request<{ ok: boolean; configured: boolean }>("/api/health"),
+  runners: () => request<Runner[]>("/api/runners"),
+  instances: () => request<RunnerInstance[]>("/api/runner-instances"),
+  instance: (id: string) => request<RunnerInstance>(instancePath(id)),
+  spin: (runnerId: string) =>
+    request<RunnerInstance>(`/api/runners/${encodeURIComponent(runnerId)}/instances`, { method: "POST" }),
+  ready: (id: string) => request<{ ready: boolean }>(`${instancePath(id)}/health`),
+  dependencies: (id: string) =>
+    request<DependencyReport>(`${instancePath(id)}/dependencies`),
+  stop: (id: string) =>
+    request<void>(instancePath(id), { method: "DELETE" }),
+  run: (id: string, workflow: unknown) =>
+    request<{ prompt_id: string }>(`${instancePath(id)}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: workflow, client_id: "flujo-web" }),
+    }),
+  runStatus: (id: string, runId: string) =>
+    request<Record<string, RunRecord>>(`${instancePath(id)}/runs/${encodeURIComponent(runId)}`),
+  cancelRun: (id: string, runId: string) =>
+    request<void>(`${instancePath(id)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
+};
+
+export function imageUrl(instance: RunnerInstance, image: OutputImage): string {
+  const query = new URLSearchParams({
+    filename: image.filename,
+    subfolder: image.subfolder || "",
+    type: image.type || "output",
+  });
+  return `${baseUrl}${instancePath(instance.id)}/outputs?${query}`;
+}
+
+export function runnerWorkflow(inputs: Record<string, unknown>) {
+  const loras = Array.isArray(inputs.loras) ? inputs.loras : [];
+  const firstLora = loras[0] as { path?: string; weight?: number } | undefined;
+  return {
+    "1": { class_type: "Krea2SVDQuantW4A4Loader", inputs: { model_name: String(inputs.modelPath) } },
+    "2": { class_type: "CLIPLoader", inputs: { clip_name: "qwen3vl_4b_fp8_scaled.safetensors", type: "krea2", device: "default" } },
+    "3": { class_type: "VAELoader", inputs: { vae_name: "qwen_image_vae.safetensors" } },
+    "4": { class_type: "Krea2SVDQuantLoraLoader", inputs: { lora_name: firstLora?.path || "bld_lora.safetensors", strength: firstLora?.weight ?? 1, adapters: "bypass (exact, slower)", model: ["1", 0] } },
+    "5": { class_type: "CLIPTextEncode", inputs: { text: String(inputs.prompt || ""), clip: ["2", 0] } },
+    "6": { class_type: "ConditioningZeroOut", inputs: { conditioning: ["5", 0] } },
+    "7": { class_type: "EmptySD3LatentImage", inputs: { width: Number(inputs.width), height: Number(inputs.height), batch_size: 1 } },
+    "8": { class_type: "KSampler", inputs: { model: ["4", 0], seed: Number(inputs.seed), steps: 8, cfg: 1, sampler_name: "euler", scheduler: "simple", positive: ["5", 0], negative: ["6", 0], latent_image: ["7", 0], denoise: 1 } },
+    "9": { class_type: "VAEDecode", inputs: { samples: ["8", 0], vae: ["3", 0] } },
+    "10": { class_type: "SaveImage", inputs: { images: ["9", 0], filename_prefix: "flujo-krea2" } },
+  };
+}
