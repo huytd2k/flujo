@@ -52,9 +52,11 @@ export type RunnerInstance = {
 };
 
 export type OutputImage = { filename: string; subfolder?: string; type?: string };
-type RunRecord = {
-  status?: { status_str?: string };
-  outputs?: Record<string, { images?: OutputImage[] }>;
+export type GenerationStatus = {
+  id: string;
+  state: "unknown" | "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  message: string;
+  images: OutputImage[];
 };
 
 const baseUrl = (import.meta.env.VITE_FLUJO_API_URL || "").replace(/\/$/, "");
@@ -129,10 +131,14 @@ export const api = {
       body: JSON.stringify({ prompt: workflow, client_id: "flujo-web" }),
     }),
   runStatus: (id: string, runId: string) =>
-    request<Record<string, RunRecord>>(`${instancePath(id)}/runs/${encodeURIComponent(runId)}`),
+    request<GenerationStatus>(`${instancePath(id)}/runs/${encodeURIComponent(runId)}`),
   cancelRun: (id: string, runId: string) =>
     request<void>(`${instancePath(id)}/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" }),
 };
+
+export function logUrl(instanceId: string): string {
+  return `${baseUrl}${instancePath(instanceId)}/logs`;
+}
 
 export function imageUrl(instance: RunnerInstance, image: OutputImage): string {
   const query = new URLSearchParams({

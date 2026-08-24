@@ -3,6 +3,7 @@
   import {
     api,
     imageUrl,
+    logUrl,
     runnerWorkflow,
     type Runner,
     type RunnerInstance,
@@ -30,6 +31,8 @@
   let selected: Result | null = null;
   let settingsOpen = false;
   let runToken = 0;
+  let runnerLogs = "";
+  let logStream: EventSource | null = null;
 
   $: selectedRunner = runners.find((runner) => runner.id === selectedRunnerId);
   $: properties = Object.entries(selectedRunner?.inputSchema.properties || {});
@@ -42,7 +45,10 @@
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && canRun) run();
     };
     window.addEventListener("keydown", handleKey);
-    return () => window.removeEventListener("keydown", handleKey);
+    return () => {
+      window.removeEventListener("keydown", handleKey);
+      logStream?.close();
+    };
   });
 
   async function initialize(attempt = 0) {
@@ -62,6 +68,7 @@
       const matching = active.find((candidate) => candidate.runnerId === available[0]?.id);
       if (matching) {
         instance = await api.instance(matching.id).catch(() => matching);
+        connectLogs(instance.id);
         const status = await api.ready(matching.id).catch(() => ({ ready: false }));
         phase = status.ready ? "ready" : "spinning";
         detail = status.ready ? "Runner is ready" : "Runner is starting";
@@ -78,6 +85,9 @@
 
   function selectRunner(id: string) {
     selectedRunnerId = id;
+    logStream?.close();
+    logStream = null;
+    runnerLogs = "";
     const definition = runners.find((runner) => runner.id === id);
     const next: Record<string, unknown> = {};
     for (const [name, property] of Object.entries(definition?.inputSchema.properties || {})) {
@@ -119,6 +129,7 @@
         if (!started) throw error;
         instance = await api.instance(started.id).catch(() => started);
       }
+      connectLogs(instance.id);
     }
     for (let attempt = 0; attempt < 120; attempt += 1) {
       if (token !== runToken) throw new Error("Run cancelled");
@@ -135,6 +146,8 @@
               .join("\n");
             instance = null;
             await api.stop(failed.id).catch(() => undefined);
+            logStream?.close();
+            logStream = null;
             throw new Error(message);
           }
           detail =
@@ -165,14 +178,13 @@
       detail = "Submitting run";
       const response = await api.run(active.id, runnerWorkflow(submittedInputs));
       runId = response.prompt_id;
+      let unknownPolls = 0;
       for (;;) {
         await sleep(1_500);
         if (token !== runToken) return;
-        const history = await api.runStatus(active.id, runId);
-        const record = history[runId];
-        const images = Object.values(record?.outputs || {}).flatMap((output) => output.images || []);
-        if (images.length > 0) {
-          const created = images.map((image) => ({
+        const generation = await api.runStatus(active.id, runId);
+        if (generation.state === "succeeded") {
+          const created = generation.images.map((image) => ({
             url: imageUrl(active, image),
             prompt: String(submittedInputs.prompt),
             inputs: submittedInputs,
@@ -184,8 +196,18 @@
           updateInput("seed", Math.floor(Math.random() * 2_147_483_647));
           return;
         }
-        if (record?.status?.status_str === "error") throw new Error("Runner failed this run");
-        detail = "Runner is rendering";
+        if (generation.state === "failed" || generation.state === "cancelled") {
+          throw new Error(generation.message);
+        }
+        if (generation.state === "unknown") {
+          unknownPolls += 1;
+          if (unknownPolls >= 3) {
+            throw new Error("Runner no longer reports this generation");
+          }
+        } else {
+          unknownPolls = 0;
+        }
+        detail = generation.message;
       }
     } catch (error) {
       if (token !== runToken) return;
@@ -209,6 +231,17 @@
   function reuse(result: Result) {
     inputs = { ...result.inputs };
     selected = null;
+  }
+
+  function connectLogs(instanceId: string) {
+    logStream?.close();
+    runnerLogs = "";
+    const source = new EventSource(logUrl(instanceId));
+    source.addEventListener("logs", (event: Event) => {
+      if (!(event instanceof MessageEvent) || typeof event.data !== "string") return;
+      runnerLogs = event.data;
+    });
+    logStream = source;
   }
 
   const sleep = (milliseconds: number) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -246,6 +279,10 @@
       <strong>{selectedRunner?.name || "No runner"}</strong>
       <small>{detail}</small>
     </div>
+    <details class="runner-logs">
+      <summary>Runner logs</summary>
+      <pre>{runnerLogs || "Waiting for runner logs…"}</pre>
+    </details>
   </aside>
 
   <main>

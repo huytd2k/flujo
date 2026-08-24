@@ -400,6 +400,10 @@ fn dependency_check_json(check: DependencyCheck) -> json.Json {
   ])
 }
 
+pub fn logs(id: String) -> Result(String, Error) {
+  command(["logs", "--tail", "100", id]) |> map_error
+}
+
 pub fn stop(id: String) -> Result(String, Error) {
   command(["rm", "--force", id]) |> map_error
 }

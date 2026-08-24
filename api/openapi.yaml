@@ -57,6 +57,12 @@ paths:
       responses:
         '200': {description: Generated image bytes}
         '502': {description: Runner output unavailable}
+  /api/runner-instances/{instanceId}/logs:
+    get:
+      description: Stream raw runner logs using server-sent events.
+      parameters: [{$ref: '#/components/parameters/InstanceId'}]
+      responses:
+        '200': {description: Runner log event stream}
   /api/runner-instances/{instanceId}/runs:
     post:
       description: Submit a run to a ready, previously checked runner instance.
@@ -65,7 +71,7 @@ paths:
         '200': {description: Run accepted}
   /api/runner-instances/{instanceId}/runs/{runId}:
     get:
-      description: Read run status and outputs.
+      description: Read the normalized generation state and outputs.
       parameters:
         - {$ref: '#/components/parameters/InstanceId'}
         - {$ref: '#/components/parameters/RunId'}

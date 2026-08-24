@@ -29,6 +29,9 @@ svg { width: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-l
 .status-line > span { width: 7px; height: 7px; border-radius: 50%; background: #d4f268; box-shadow: 0 0 10px #d4f26866; }
 .status-line > span.phase-busy { background: #e9b95e; box-shadow: 0 0 10px #e9b95e55; }
 .status-line > span.phase-error { background: #ff776d; box-shadow: 0 0 10px #ff776d55; }
+.runner-logs { margin-top: 8px; border: 1px solid #292c29; border-radius: 10px; background: #0d0f0e; }
+.runner-logs summary { padding: 9px 11px; color: #858b82; cursor: pointer; font-size: 11px; }
+.runner-logs pre { max-height: 180px; margin: 0; padding: 0 11px 11px; overflow: auto; color: #8f968b; font: 10px/1.45 ui-monospace, monospace; white-space: pre-wrap; }
 
 main { grid-column: 2; width: min(1120px, calc(100% - 64px)); margin: 0 auto; padding: 42px 0 60px; }
 header { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; margin-bottom: 30px; }
@@ -90,7 +93,7 @@ h1 { margin: 0; font-family: "Manrope", sans-serif; font-size: clamp(27px, 3vw, 
   .new-button, .side-section { display: none; }
   .runtime-card { padding: 0; border: 0; background: transparent; text-align: right; }
   .runtime-card strong { margin: 0; }
-  .runtime-card small, .status-line { display: none; }
+  .runtime-card small, .status-line, .runner-logs { display: none; }
   main { width: min(100% - 28px, 680px); padding: 28px 0 36px; }
   .workspace { min-height: 52vh; }
   .composer { width: calc(100% - 16px); padding: 14px; }

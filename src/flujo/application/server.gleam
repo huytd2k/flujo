@@ -4,7 +4,7 @@ import flujo/adapters/docker
 import flujo/static
 import gleam/bit_array
 import gleam/bytes_tree
-import gleam/erlang/process
+import gleam/erlang/process.{type Subject}
 import gleam/http.{Delete, Get, Options, Post}
 import gleam/http/request.{type Request}
 import gleam/http/response.{type Response}
@@ -12,8 +12,10 @@ import gleam/int
 import gleam/json
 import gleam/list
 import gleam/option
+import gleam/otp/actor
 import gleam/result
 import gleam/string
+import gleam/string_tree
 import mist.{type Connection, type ResponseData}
 
 pub fn main() {
@@ -68,6 +70,8 @@ fn handle(
       runner_dependencies(instance_id)
     Get, ["api", "runner-instances", instance_id, "outputs"] ->
       runner_output(request, instance_id)
+    Get, ["api", "runner-instances", instance_id, "logs"] ->
+      runner_logs(request, instance_id)
     Post, ["api", "runner-instances", instance_id, "runs"] ->
       with_body(request, fn(body) {
         provider_submit(provider, instance_id, body)
@@ -120,6 +124,62 @@ fn runner_dependencies(id: String) -> Response(ResponseData) {
     Ok(report) -> respond(200, report)
     Error(error) -> docker_error(error)
   }
+}
+
+type LogMessage {
+  PollLogs
+}
+
+type LogState {
+  LogState(id: String, previous: String, subject: Subject(LogMessage))
+}
+
+fn runner_logs(
+  request: Request(Connection),
+  id: String,
+) -> Response(ResponseData) {
+  mist.server_sent_events(
+    request,
+    response.new(200),
+    fn(subject) {
+      process.send_after(subject, 0, PollLogs)
+      LogState(id, "", subject)
+    },
+    fn(state, message, connection) {
+      case message {
+        PollLogs -> {
+          let next = case docker.logs(state.id) {
+            Ok(logs) if logs != state.previous -> {
+              let log_event =
+                logs
+                |> string_tree.from_string
+                |> mist.event
+                |> mist.event_name("logs")
+              let _ = mist.send_event(connection, log_event)
+
+              LogState(..state, previous: logs)
+            }
+            Ok(_) -> state
+            Error(error) -> {
+              let error_message = case error {
+                docker.DockerUnavailable(message) -> message
+                docker.UnknownRunner -> "unknown runner"
+              }
+              let error_event =
+                error_message
+                |> string_tree.from_string
+                |> mist.event
+                |> mist.event_name("error")
+              let _ = mist.send_event(connection, error_event)
+              state
+            }
+          }
+          process.send_after(next.subject, 1000, PollLogs)
+          actor.continue(next)
+        }
+      }
+    },
+  )
 }
 
 fn runner_output(
@@ -242,7 +302,7 @@ fn provider_history(
   prompt_id: String,
 ) -> Result(String, runtime.Error) {
   use port <- result.try(docker.port(id) |> docker_to_runtime_error)
-  runtime.history("http://127.0.0.1:" <> port, prompt_id)
+  runtime.generation("http://127.0.0.1:" <> port, prompt_id)
 }
 
 fn provider_cancel(
