@@ -36,6 +36,44 @@ inside the small Erlang runtime image. The Gleam/Mist server serves both the
 SPA and `/api/*` on port 4000; `docker compose up --build` publishes that single
 service at `http://localhost:8080`.
 
+## Local ComfyUI and phone access
+
+Local ComfyUI is the default provider. The Compose stack builds a dedicated
+`flujo-comfy:cu130` image containing CUDA 13, the exact PyTorch cu130 packages,
+ComfyUI, and the SVDQuant custom node. It mounts the host's NVIDIA devices,
+checkpoints, text encoders, VAE, LoRAs, and output directory; model weights are
+not duplicated inside the image. This machine does not have NVIDIA Container
+Toolkit registered with Docker, so Compose explicitly mounts GPU 0 and the
+read-only driver 610 ABI libraries. If the host NVIDIA driver changes, update
+those versioned library paths in `compose.yaml` (or install NVIDIA Container
+Toolkit and replace them with `gpus: all`).
+
+For running without Docker, the included launcher uses the tested combined environment (Python 3.11,
+PyTorch `2.11.0+cu130`, CUDA 13.0, and `comfy_kitchen`), verifies that CUDA is
+available, and starts the worker with the required custom node and 1 GB VRAM
+reserve:
+
+```sh
+./scripts/start-local-comfy.sh
+```
+
+Override `FLUJO_COMFY_PYTHON` if that environment moves. The current default is
+`/home/huytran/micromamba/envs/comfyenv/bin/python3.11`; the launcher refuses a
+PyTorch build older than cu130 because it would disable the optimized W4A4 CUDA
+backend. It binds only to `192.168.0.33` and permits CORS only from
+`http://192.168.0.33:8080`; update `FLUJO_COMFY_LISTEN` and
+`FLUJO_PHONE_ORIGIN` if the machine's LAN address changes.
+
+Set `FLUJO_LAN_IP` and `FLUJO_PHONE_ORIGIN` in `.env`, then start both services
+with `docker compose up --build -d` and open
+`http://<this-machine-LAN-IP>:8080` on the phone. Docker connects to the same
+private Compose hostname; generated images use the LAN-published port 8188.
+Set `COMFYUI_PUBLIC_URL` when the public address differs from the LAN IP.
+The local workflow uses
+`Krea2-Turbo-SVDQuant-W4A4-rank256-actaware.safetensors`,
+`bld_lora.safetensors`, the Qwen3VL encoder, and Qwen Image VAE. To restore the
+cloud provider, set `FLUJO_PROVIDER=runpod` and provide `RUNPOD_API_KEY`.
+
 ---
 
 ## 1. Project goals

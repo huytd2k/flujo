@@ -1,0 +1,3 @@
+krea2_svdquant_spike:
+  base_path: /home/huytran/sources/flujo/artifacts
+  diffusion_models: checkpoints

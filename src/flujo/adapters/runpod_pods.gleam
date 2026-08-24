@@ -17,6 +17,7 @@ pub type Error {
 }
 
 const runpod_url = "https://rest.runpod.io/v1"
+
 const template_id = "7d5q9pntz6"
 
 pub fn provision(config: Config) -> Result(String, Error) {
@@ -26,10 +27,16 @@ pub fn provision(config: Config) -> Result(String, Error) {
       #("computeType", json.string("GPU")),
       #("cloudType", json.string("COMMUNITY")),
       #("gpuCount", json.int(1)),
-      #("gpuTypeIds", json.array([
-        "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090",
-        "NVIDIA RTX A5000", "NVIDIA RTX A6000",
-      ], json.string)),
+      #(
+        "gpuTypeIds",
+        json.array(
+          [
+            "NVIDIA GeForce RTX 3090", "NVIDIA GeForce RTX 4090",
+            "NVIDIA RTX A5000", "NVIDIA RTX A6000",
+          ],
+          json.string,
+        ),
+      ),
       #("gpuTypePriority", json.string("availability")),
       #("containerDiskInGb", json.int(50)),
       #("volumeInGb", json.int(20)),
@@ -70,21 +77,76 @@ pub fn cancel(pod_id: String) -> Result(String, Error) {
   comfy(pod_id, Post, "/interrupt", "{}")
 }
 
-fn runpod(config: Config, method: Method, path: String, body: String) -> Result(String, Error) {
+pub fn remote_health(base_url: String) -> Result(String, Error) {
+  remote_comfy(base_url, Get, "/system_stats", "")
+}
+
+pub fn remote_submit(base_url: String, body: String) -> Result(String, Error) {
+  remote_comfy(base_url, Post, "/prompt", body)
+}
+
+pub fn remote_history(
+  base_url: String,
+  prompt_id: String,
+) -> Result(String, Error) {
+  remote_comfy(base_url, Get, "/history/" <> prompt_id, "")
+}
+
+pub fn remote_cancel(base_url: String) -> Result(String, Error) {
+  remote_comfy(base_url, Post, "/interrupt", "{}")
+}
+
+fn runpod(
+  config: Config,
+  method: Method,
+  path: String,
+  body: String,
+) -> Result(String, Error) {
   let Config(api_key) = config
-  dispatch(method, runpod_url <> path, body, [#("authorization", "Bearer " <> api_key)])
+  dispatch(method, runpod_url <> path, body, [
+    #("authorization", "Bearer " <> api_key),
+  ])
 }
 
-fn comfy(pod_id: String, method: Method, path: String, body: String) -> Result(String, Error) {
-  dispatch(method, "https://" <> pod_id <> "-8188.proxy.runpod.net" <> path, body, [])
+fn comfy(
+  pod_id: String,
+  method: Method,
+  path: String,
+  body: String,
+) -> Result(String, Error) {
+  dispatch(
+    method,
+    "https://" <> pod_id <> "-8188.proxy.runpod.net" <> path,
+    body,
+    [],
+  )
 }
 
-fn dispatch(method: Method, url: String, body: String, headers: List(#(String, String))) -> Result(String, Error) {
-  use outgoing <- result.try(request.to(url) |> result.map_error(fn(_) { InvalidUrl }))
+fn remote_comfy(
+  base_url: String,
+  method: Method,
+  path: String,
+  body: String,
+) -> Result(String, Error) {
+  dispatch(method, base_url <> path, body, [])
+}
+
+fn dispatch(
+  method: Method,
+  url: String,
+  body: String,
+  headers: List(#(String, String)),
+) -> Result(String, Error) {
+  use outgoing <- result.try(
+    request.to(url) |> result.map_error(fn(_) { InvalidUrl }),
+  )
   let outgoing =
     headers
     |> list.fold(
-      outgoing |> request.set_method(method) |> request.set_header("content-type", "application/json") |> request.set_body(body),
+      outgoing
+        |> request.set_method(method)
+        |> request.set_header("content-type", "application/json")
+        |> request.set_body(body),
       fn(request_, header) { request.set_header(request_, header.0, header.1) },
     )
   use response <- result.try(

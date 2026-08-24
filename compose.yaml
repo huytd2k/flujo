@@ -1,8 +1,55 @@
 services:
+  comfy:
+    build:
+      context: .
+      dockerfile: docker/comfy/Dockerfile
+    image: flujo-comfy:cu130
+    environment:
+      CUDA_VISIBLE_DEVICES: "0"
+      LD_LIBRARY_PATH: /usr/local/nvidia/lib64
+    devices:
+      - /dev/nvidia0:/dev/nvidia0
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+    command:
+      - --listen
+      - 0.0.0.0
+      - --port
+      - "8188"
+      - --enable-cors-header
+      - ${FLUJO_PHONE_ORIGIN:-http://192.168.0.33:8080}
+      - --reserve-vram
+      - "1"
+      - --disable-all-custom-nodes
+      - --whitelist-custom-nodes
+      - krea-2-svdquant
+    ports:
+      - "${FLUJO_LAN_IP:-192.168.0.33}:8188:8188"
+    volumes:
+      - ./artifacts/checkpoints:/opt/ComfyUI/models/diffusion_models:ro
+      - /home/huytran/ComfyUI/models/text_encoders:/opt/ComfyUI/models/text_encoders:ro
+      - /home/huytran/ComfyUI/models/vae:/opt/ComfyUI/models/vae:ro
+      - /home/huytran/ComfyUI/models/loras:/opt/ComfyUI/models/loras:ro
+      - /home/huytran/ComfyUI/output:/opt/ComfyUI/output
+      # NVIDIA Container Toolkit is not installed on this machine, so mount
+      # the host driver ABI explicitly while CUDA user-space stays in-image.
+      - /usr/lib/x86_64-linux-gnu/libcuda.so.610.57.04:/usr/local/nvidia/lib64/libcuda.so.1:ro
+      - /usr/lib/x86_64-linux-gnu/libnvidia-ml.so.610.57.04:/usr/local/nvidia/lib64/libnvidia-ml.so.1:ro
+      - /usr/lib/x86_64-linux-gnu/libnvidia-ptxjitcompiler.so.610.57.04:/usr/local/nvidia/lib64/libnvidia-ptxjitcompiler.so.1:ro
+      - /usr/lib/x86_64-linux-gnu/libnvidia-gpucomp.so.610.57.04:/usr/local/nvidia/lib64/libnvidia-gpucomp.so.610.57.04:ro
+    restart: unless-stopped
+
   flujo:
     build: .
     environment:
       PORT: 4000
+      FLUJO_PROVIDER: ${FLUJO_PROVIDER:-local}
       RUNPOD_API_KEY: ${RUNPOD_API_KEY:-}
+      COMFYUI_URL: ${COMFYUI_URL:-http://comfy:8188}
+      COMFYUI_PUBLIC_URL: ${COMFYUI_PUBLIC_URL:-http://192.168.0.33:8188}
+    depends_on:
+      comfy:
+        condition: service_healthy
     ports: ["8080:4000"]
     restart: unless-stopped

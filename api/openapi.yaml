@@ -6,7 +6,7 @@ paths:
       responses: {'200': {description: Gateway health}}
   /api/workers:
     post:
-      description: Provision a normal RunPod Pod using the server-side template ID.
+      description: Return the configured local ComfyUI worker, or provision a RunPod Pod in runpod mode.
       responses: {'201': {description: RunPod Pod, content: {application/json: {schema: {$ref: '#/components/schemas/Pod'}}}}}
   /api/workers/{podId}:
     get:
